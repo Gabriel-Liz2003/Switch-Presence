@@ -7,7 +7,7 @@ package dev.gabriel.switchpresence
 internal object DiscordStatusText {
     fun describe(sdkStatus: String, millisecondsSincePublish: Long): String {
         if (sdkStatus == "Enviando atividade ao Discord" && millisecondsSincePublish >= 20_000L) {
-            return "Discord sem resposta há mais de 20s. Confira se o Discord está aberto no celular."
+            return "Discord não confirmou a publicação há mais de 20s."
         }
         return sdkStatus
     }
