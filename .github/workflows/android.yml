@@ -3,7 +3,6 @@ name: Android CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -64,71 +63,3 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
           if-no-files-found: error
-  release:
-    name: Signed SDK-enabled release
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      DISCORD_SDK_AAR_URL: ${{ secrets.DISCORD_SDK_AAR_URL }}
-      DISCORD_SDK_PRIVATE_REPO: ${{ vars.DISCORD_SDK_PRIVATE_REPO }}
-      DISCORD_SDK_READ_TOKEN: ${{ secrets.DISCORD_SDK_READ_TOKEN }}
-      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-      ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-      ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      REQUIRE_DISCORD_SDK: 'true'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@v4
-      - name: Install native Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
-      - name: Verify required secrets and tag
-        run: |
-          for var in ANDROID_KEYSTORE_B64 ANDROID_SIGNING_STORE_PASSWORD ANDROID_SIGNING_KEY_ALIAS ANDROID_SIGNING_KEY_PASSWORD; do
-            if [ -z "${!var}" ]; then
-              echo "::error::Required secret missing: $var"
-              exit 1
-            fi
-          done
-          if [ -z "$DISCORD_SDK_AAR_URL" ] && { [ -z "$DISCORD_SDK_PRIVATE_REPO" ] || [ -z "$DISCORD_SDK_READ_TOKEN" ]; }; then
-            echo "::error::Configure private GitHub SDK repository or DISCORD_SDK_AAR_URL secret."
-            exit 1
-          fi
-          APP_VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
-          test "$GITHUB_REF_NAME" = "v$APP_VERSION" || { echo "::error::Tag must match versionName"; exit 1; }
-      - name: Download official SDK privately
-        run: |
-          if [ -n "$DISCORD_SDK_PRIVATE_REPO" ] && [ -n "$DISCORD_SDK_READ_TOKEN" ]; then
-            bash scripts/download_private_sdk.sh
-          else
-            mkdir -p app/libs
-            curl --fail --location --retry 2 --silent --show-error "$DISCORD_SDK_AAR_URL" -o app/libs/discord_partner_sdk.aar
-            python3 scripts/verify_sdk.py app/libs/discord_partner_sdk.aar
-          fi
-      - name: Configure persistent signing key
-        run: |
-          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/switch-presence-release.jks"
-          echo "ANDROID_SIGNING_KEYSTORE=$RUNNER_TEMP/switch-presence-release.jks" >> "$GITHUB_ENV"
-      - name: Build FULL release
-        run: gradle --no-daemon assembleRelease
-      - name: Verify and checksum APK
-        run: |
-          test -f app/build/outputs/apk/release/app-release.apk
-          cp app/build/outputs/apk/release/app-release.apk SwitchPresence.apk
-          sha256sum SwitchPresence.apk > SwitchPresence.sha256
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            SwitchPresence.apk
-            SwitchPresence.sha256
-          fail_on_unmatched_files: true
-          generate_release_notes: true
