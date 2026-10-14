@@ -29,10 +29,13 @@ object DiscordBridge {
     fun clear() { if (supported) nativeClear() }
     fun pump() { if (supported) nativePump() }
     fun status(): String = if (supported) nativeLastStatus() else "SDK do Discord não incluído"
+    /** -1 when publication succeeded, is still pending, or cannot safely be retried. */
+    fun retryDelayMs(): Long = if (supported) nativeRetryDelayMs() else -1L
 
     private external fun nativeSetup(applicationId: String): Boolean
     private external fun nativePublish(title: String, image: String, platform: String, started: Long)
     private external fun nativeClear()
     private external fun nativePump()
     private external fun nativeLastStatus(): String
+    private external fun nativeRetryDelayMs(): Long
 }

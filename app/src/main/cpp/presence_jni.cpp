@@ -11,6 +11,8 @@ std::recursive_mutex guard;
 std::unique_ptr<discordpp::Client> client;
 std::string status = "Discord não conectado";
 uint64_t presenceRevision = 0;
+// -1 means no retry is currently warranted. A successful publish resets it.
+int64_t publishRetryDelayMs = -1;
 
 // ClientResult::Error() may be empty even on a failure. Include the type and
 // numeric code so Android users can report the actual SDK failure category.
@@ -64,6 +66,7 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativeSetup(JNIEnv* env, jobject, 
         replacement->SetApplicationId(id);
         ++presenceRevision;
         client.swap(replacement);
+        publishRetryDelayMs = -1;
         status = "Canal do Discord reinicializado";
         return JNI_TRUE;
     } catch (...) {
@@ -100,12 +103,26 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativePublish(
     // Ignore late publication callbacks after ClearRichPresence was requested.
     const uint64_t revision = ++presenceRevision;
     status = "Enviando atividade ao Discord";
+    publishRetryDelayMs = -1;
     client->UpdateRichPresence(activity, [revision](discordpp::ClientResult result) {
         std::lock_guard<std::recursive_mutex> lock(guard);
         if (revision != presenceRevision) return;
-        status = result.Successful()
-            ? "Atividade publicada"
-            : "Discord recusou: " + failureDetails(result);
+        if (result.Successful()) {
+            status = "Atividade publicada";
+            publishRetryDelayMs = -1;
+        } else {
+            status = "Discord recusou: " + failureDetails(result);
+            // Honor SDK retry guidance. RPCError with code 0 was also observed
+            // to recover on a later publication on the user's Android device.
+            const bool canRetry = result.Retryable() ||
+                (result.Type() == discordpp::ErrorType::RPCError && result.ErrorCode() == 0);
+            const float retryAfterSeconds = result.RetryAfter();
+            const int64_t suggestedDelayMs = retryAfterSeconds > 0
+                ? static_cast<int64_t>(retryAfterSeconds * 1000.0f) : 15000;
+            publishRetryDelayMs = canRetry
+                ? (suggestedDelayMs < 15000 ? 15000 : suggestedDelayMs)
+                : -1;
+        }
     });
 }
 
@@ -113,6 +130,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_gabriel_switchpresence_DiscordBridge_nativeClear(JNIEnv*, jobject) {
     std::lock_guard<std::recursive_mutex> lock(guard);
     ++presenceRevision;
+    publishRetryDelayMs = -1;
     if (client) {
         client->ClearRichPresence();
         // ClearRichPresence has no result callback. Do not claim server confirmation.
@@ -132,4 +150,12 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_gabriel_switchpresence_DiscordBridge_nativeLastStatus(JNIEnv* env, jobject) {
     std::lock_guard<std::recursive_mutex> lock(guard);
     return env->NewStringUTF(status.c_str());
+}
+
+// Suggested minimum interval before retrying a failed publication. -1 means
+// no retry (success, pending result, non-retryable error, or offline clear).
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_gabriel_switchpresence_DiscordBridge_nativeRetryDelayMs(JNIEnv*, jobject) {
+    std::lock_guard<std::recursive_mutex> lock(guard);
+    return static_cast<jlong>(publishRetryDelayMs);
 }
