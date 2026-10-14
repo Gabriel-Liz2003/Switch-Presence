@@ -61,6 +61,23 @@ class PresenceService : Service() {
         } catch (_: java.util.concurrent.RejectedExecutionException) { }
     }
 
+    /**
+     * Match the successful stop-monitoring path: clear twice and pump callbacks
+     * between requests while keeping the original native RPC client alive.
+     * ClearRichPresence() has no completion callback.
+     * This method must run on the callbacks executor.
+     */
+    private fun clearDiscordWithDrain() {
+        if (!DiscordBridge.supported) return
+        repeat(2) {
+            DiscordBridge.clear()
+            repeat(3) {
+                DiscordBridge.pump()
+                Thread.sleep(150L)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         settings = SecureSettings(this)
@@ -89,12 +106,7 @@ class PresenceService : Service() {
                         try {
                             callbacks.execute {
                                 try {
-                                    DiscordBridge.clear()
-                                    // Pump RPC after ClearRichPresence, without blocking service teardown.
-                                    repeat(3) {
-                                        DiscordBridge.pump()
-                                        Thread.sleep(150)
-                                    }
+                                    clearDiscordWithDrain()
                                 } catch (_: Exception) {
                                     // Discord's clear API has no success callback.
                                 }
@@ -119,7 +131,7 @@ class PresenceService : Service() {
                         } else if (!stopping && generation == presenceGeneration.get()) {
                             val active = lastActiveGame
                             if (active == null) {
-                                DiscordBridge.clear()
+                                clearDiscordWithDrain()
                                 settings.status = "Switch offline • limpeza solicitada ao Discord"
                             } else {
                                 // A reconnect while playing must republish, not clear the game.
@@ -134,16 +146,12 @@ class PresenceService : Service() {
             ACTION_CLEAR -> {
                 if (pollTask != null && !stopping) {
                     presenceGeneration.incrementAndGet()
-                    // Repair RPC session before asking Discord to forget stale activity.
+                    // Clear using the original native RPC client (no premature reset).
                     enqueueDiscord {
-                        if (DiscordBridge.setup(settings.discordId)) {
-                            DiscordBridge.clear()
-                            if (activeGameSummary == null)
-                                settings.status = "Switch offline • aguardando próximo jogo"
-                            else settings.status = "Limpeza solicitada; um jogo ativo pode reaparecer"
-                        } else {
-                            settings.status = "Não foi possível reconectar ao Discord"
-                        }
+                        clearDiscordWithDrain()
+                        settings.status = if (activeGameSummary == null)
+                            "Switch offline • limpeza solicitada ao Discord"
+                        else "Limpeza solicitada; um jogo ativo pode reaparecer"
                     }
                     lastGame = null
                     lastPublishedElapsed = 0L
@@ -209,14 +217,12 @@ class PresenceService : Service() {
                     settings.status = "Switch offline • aguardando próximo jogo"
                     updateForegroundNotice("Switch offline • checando Discord")
                     if (DiscordBridge.supported) {
-                        val repairTransport = DiscordReconnectPolicy.shouldRefresh(offlinePolls)
+                        val firstOfflinePoll = offlinePolls == 1
                         enqueueDiscord {
-                            if (repairTransport && !DiscordBridge.setup(settings.discordId)) {
-                                settings.status = "Discord desconectado • abra o Discord no celular"
-                            } else {
-                                // Clear through a live/rebuilt transport; this API has no ack.
-                                DiscordBridge.clear()
-                            }
+                            // Do not replace the Client every few offline polls: it may
+                            // still own the activity we are trying to remove.
+                            if (firstOfflinePoll) clearDiscordWithDrain()
+                            else DiscordBridge.clear()
                         }
                     }
                 } else {
@@ -319,8 +325,7 @@ class PresenceService : Service() {
             try {
                 callbacks.execute {
                     try {
-                        DiscordBridge.clear()
-                        DiscordBridge.pump()
+                        clearDiscordWithDrain()
                     } catch (_: Exception) {}
                 }
             } catch (_: Exception) {}
