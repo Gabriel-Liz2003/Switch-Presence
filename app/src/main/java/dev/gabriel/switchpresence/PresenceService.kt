@@ -15,6 +15,7 @@ import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Poll Nintendo while a user-controlled foreground service is active.
@@ -31,11 +32,33 @@ class PresenceService : Service() {
     @Volatile private var lastPublishedElapsed = 0L
     @Volatile private var activeGameSummary: String? = null
     private var errors = 0
+    private var offlinePolls = 0
+    private val presenceGeneration = AtomicLong(0L)
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
     private lateinit var settings: SecureSettings
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * The SDK is owned by the long-lived foreground service, never the Activity.
+     * Run all native RPC requests and RunCallbacks() on the same executor so
+     * callback processing does not race a publish/clear/reconnect request.
+     */
+    private fun enqueueDiscord(action: () -> Unit) {
+        if (!DiscordBridge.supported || callbacks.isShutdown) return
+        try {
+            callbacks.execute {
+                try {
+                    action()
+                    DiscordBridge.pump()
+                } catch (e: Exception) {
+                    if (!stopping) settings.status =
+                        "Discord indisponível: ${e.message ?: "falha de comunicação"}"
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -57,6 +80,7 @@ class PresenceService : Service() {
                     settings.status = "Monitoramento parado; remoção solicitada ao Discord."
                     pollTask?.cancel(true)
                     pollTask = null
+                    presenceGeneration.incrementAndGet()
                     activeGameSummary = null
 
                     if (DiscordBridge.supported) {
@@ -85,8 +109,18 @@ class PresenceService : Service() {
             }
             ACTION_CLEAR -> {
                 if (pollTask != null && !stopping) {
-                    clearDiscord("Limpeza manual solicitada ao Discord")
-                    // If still online the following poll may legitimately publish again.
+                    presenceGeneration.incrementAndGet()
+                    // Repair RPC session before asking Discord to forget stale activity.
+                    enqueueDiscord {
+                        if (DiscordBridge.setup(settings.discordId)) {
+                            DiscordBridge.clear()
+                            if (activeGameSummary == null)
+                                settings.status = "Switch offline • aguardando próximo jogo"
+                            else settings.status = "Limpeza solicitada; um jogo ativo pode reaparecer"
+                        } else {
+                            settings.status = "Não foi possível reconectar ao Discord"
+                        }
+                    }
                     lastGame = null
                     lastPublishedElapsed = 0L
                 }
@@ -111,6 +145,7 @@ class PresenceService : Service() {
         }
 
         isActive = true
+        offlinePolls = 0
         settings.running = true
         settings.status = if (DiscordBridge.supported) "Conectando à Nintendo e ao Discord..."
                           else "Modo prévia: lendo Nintendo sem publicar no Discord."
@@ -137,6 +172,8 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
+                    presenceGeneration.incrementAndGet()
+                    offlinePolls++
                     activeGameSummary = null
                     lastGame = null
                     gameStartedAt = 0L
@@ -144,17 +181,22 @@ class PresenceService : Service() {
                     // Retry the clear in the background on every offline poll, even
                     // after an app restart. ClearRichPresence() has no callback;
                     // do not imply that the app is waiting for Discord to respond.
+                    settings.status = "Switch offline • aguardando próximo jogo"
+                    updateForegroundNotice("Switch offline • checando Discord")
                     if (DiscordBridge.supported) {
-                        try {
-                            DiscordBridge.clear()
-                            settings.status = "Switch offline • aguardando próximo jogo"
-                        } catch (error: Exception) {
-                            settings.status = "Switch offline • falha ao limpar Discord: ${error.message ?: "erro"}"
+                        val repairTransport = DiscordReconnectPolicy.shouldRefresh(offlinePolls)
+                        enqueueDiscord {
+                            if (repairTransport && !DiscordBridge.setup(settings.discordId)) {
+                                settings.status = "Discord desconectado • abra o Discord no celular"
+                            } else {
+                                // Clear through a live/rebuilt transport; this API has no ack.
+                                DiscordBridge.clear()
+                            }
                         }
-                    } else {
-                        settings.status = "Switch offline • aguardando próximo jogo"
                     }
                 } else {
+                    updateForegroundNotice("Jogando: ${game.title.take(70)}")
+                    offlinePolls = 0
                     activeGameSummary = "Jogando: ${game.title} • ${game.platform}"
                     val changed = game.title != lastGame
                     if (changed) {
@@ -163,8 +205,15 @@ class PresenceService : Service() {
                     }
                     if (DiscordBridge.supported && (changed ||
                             SystemClock.elapsedRealtime() - lastPublishedElapsed > 90_000)) {
-                        DiscordBridge.publish(game, gameStartedAt)
+                        val generation = presenceGeneration.incrementAndGet()
+                        val started = gameStartedAt
                         lastPublishedElapsed = SystemClock.elapsedRealtime()
+                        enqueueDiscord {
+                            // A late publish after an offline poll would reintroduce stale activity.
+                            if (!stopping && generation == presenceGeneration.get()) {
+                                DiscordBridge.publish(game, started)
+                            }
+                        }
                     }
                     val summary = activeGameSummary.orEmpty()
                     settings.status = if (DiscordBridge.supported) {
@@ -178,13 +227,15 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors++
                 settings.status = "Falha nxapi ($errors): ${error.message ?: "sem conexão"}"
+                updateForegroundNotice("Falha ao consultar o nxapi • tentativa $errors")
                 if (errors >= 3) {
                     activeGameSummary = null
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
+                    presenceGeneration.incrementAndGet()
                     if (DiscordBridge.supported) {
-                        clearDiscord("Sem dados Nintendo: limpeza solicitada ao Discord")
+                        enqueueDiscord { DiscordBridge.clear() }
                     }
                 }
             }
@@ -192,30 +243,36 @@ class PresenceService : Service() {
         return START_STICKY
     }
 
-    private fun clearDiscord(label: String) {
+    private fun foregroundNotification(detail: String): Notification {
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
+        val stop = PendingIntent.getService(
+            this, 1, Intent(this, javaClass).setAction(ACTION_STOP), flags
+        )
+        val repair = PendingIntent.getService(
+            this, 2, Intent(this, javaClass).setAction(ACTION_CLEAR), flags
+        )
+        return Notification.Builder(this, "presence")
+            .setSmallIcon(R.drawable.app_icon)
+            .setContentTitle("Switch Presence")
+            .setContentText(detail.take(100))
+            .setContentIntent(open)
+            .addAction(android.R.drawable.ic_media_pause, "Parar", stop)
+            .addAction(android.R.drawable.ic_menu_rotate, "Reconectar Discord", repair)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun updateForegroundNotice(detail: String) {
         try {
-            if (DiscordBridge.supported) {
-                DiscordBridge.clear()
-                settings.status = "$label (sem confirmação do Discord)"
-            }
-        } catch (e: Exception) {
-            settings.status = "Falha ao limpar Discord: ${e.message ?: "desconhecida"}"
-        }
+            val time = android.text.format.DateFormat.format("HH:mm", System.currentTimeMillis())
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(30, foregroundNotification("$detail • $time"))
+        } catch (_: Exception) { /* Notification permission may be denied. */ }
     }
 
     private fun startForegroundNotice() {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notice = Notification.Builder(this, "presence")
-            .setSmallIcon(R.drawable.app_icon)
-            .setContentTitle("Switch Presence")
-            .setContentText("Monitorando o Nintendo Switch")
-            .setContentIntent(open)
-            .addAction(android.R.drawable.ic_media_pause, "Parar", stop)
-            .setOngoing(true)
-            .build()
+        val notice = foregroundNotification("Iniciando monitoramento...")
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(30, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else startForeground(30, notice)

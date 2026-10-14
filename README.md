@@ -111,3 +111,9 @@ When a newer release does not exist, it shows the currently installed version. I
 - [x] End-to-end activity publication demonstrated on device (user report, The Witcher 3)
 - [ ] Confirm Discord actually removes stale activity after offline; SDK ClearRichPresence has no result callback
 - [ ] Verify v0.1.2 stop button on Android: running flag clears immediately, Nintendo polling stops and the service exits even if native SDK stalls; Discord may take longer to remove the activity.
+
+## Android background RPC troubleshooting (v0.1.6)
+
+If Rich Presence stops clearing when the user dismisses the app from Android recents but the foreground notification stays visible, background native RPC may have lost its transport while nxapi polling continues. This release serializes native SDK calls and callback pumping on a dedicated executor, avoids publishing an old game after an offline state, and attempts an RPC client reset after the second offline check (then every eighth check) without polling Discord aggressively. The notification displays the most recent Nintendo polling time and includes **Reconectar Discord**, which renews the local RPC client and re-issues ClearRichPresence. This SDK API is best-effort and cannot confirm activity removal. An operating-system battery restriction or a disconnected Discord Android client can still prevent it.
+
+To improve reliability on aggressive Android battery managers, allow **unrestricted background battery use** for both Switch Presence and Discord. Keep the Switch Presence notification enabled and avoid Android **Force stop**, which terminates background work. A foreground-service notification does not guarantee Discord itself will process RPC requests while backgrounded.

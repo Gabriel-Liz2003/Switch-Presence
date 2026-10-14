@@ -31,9 +31,13 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativeSetup(JNIEnv* env, jobject, 
             return JNI_FALSE;
         uint64_t id = std::stoull(input);
         if (!id) return JNI_FALSE;
-        client = std::make_unique<discordpp::Client>();
-        client->SetApplicationId(id);
-        status = "Pronto para publicar";
+        // Rebuild the RPC transport when Android/Discord has backgrounded it.
+        // Invalidate callbacks for the previous Client before releasing it.
+        auto replacement = std::make_unique<discordpp::Client>();
+        replacement->SetApplicationId(id);
+        ++presenceRevision;
+        client.swap(replacement);
+        status = "Canal do Discord reinicializado";
         return JNI_TRUE;
     } catch (...) {
         status = "ID inválido ou falha no SDK";
