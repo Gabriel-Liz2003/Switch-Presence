@@ -181,6 +181,7 @@ class PresenceService : Service() {
                     // after an app restart. ClearRichPresence() has no callback;
                     // do not imply that the app is waiting for Discord to respond.
                     settings.status = "Switch offline • aguardando próximo jogo"
+                    updateForegroundNotice("Switch offline • checando Discord")
                     if (DiscordBridge.supported) {
                         val repairTransport = DiscordReconnectPolicy.shouldRefresh(offlinePolls)
                         enqueueDiscord {
@@ -193,6 +194,7 @@ class PresenceService : Service() {
                         }
                     }
                 } else {
+                    updateForegroundNotice("Jogando: ${game.title.take(70)}")
                     offlinePolls = 0
                     activeGameSummary = "Jogando: ${game.title} • ${game.platform}"
                     val changed = game.title != lastGame
@@ -224,6 +226,7 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors++
                 settings.status = "Falha nxapi ($errors): ${error.message ?: "sem conexão"}"
+                updateForegroundNotice("Falha ao consultar o nxapi • tentativa $errors")
                 if (errors >= 3) {
                     activeGameSummary = null
                     lastGame = null
@@ -250,19 +253,35 @@ class PresenceService : Service() {
         }
     }
 
-    private fun startForegroundNotice() {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notice = Notification.Builder(this, "presence")
+    private fun foregroundNotification(detail: String): Notification {
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
+        val stop = PendingIntent.getService(
+            this, 1, Intent(this, javaClass).setAction(ACTION_STOP), flags
+        )
+        val repair = PendingIntent.getService(
+            this, 2, Intent(this, javaClass).setAction(ACTION_CLEAR), flags
+        )
+        return Notification.Builder(this, "presence")
             .setSmallIcon(R.drawable.app_icon)
             .setContentTitle("Switch Presence")
-            .setContentText("Monitorando o Nintendo Switch")
+            .setContentText(detail.take(100))
             .setContentIntent(open)
             .addAction(android.R.drawable.ic_media_pause, "Parar", stop)
+            .addAction(android.R.drawable.ic_menu_rotate, "Reconectar Discord", repair)
             .setOngoing(true)
             .build()
+    }
+
+    private fun updateForegroundNotice(detail: String) {
+        try {
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(30, foregroundNotification(detail))
+        } catch (_: Exception) { /* Notification permission may be denied. */ }
+    }
+
+    private fun startForegroundNotice() {
+        val notice = foregroundNotification("Iniciando monitoramento...")
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(30, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else startForeground(30, notice)
