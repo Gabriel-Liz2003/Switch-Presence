@@ -15,6 +15,13 @@ class DiscordPublishRetryPolicyTest {
         assertEquals(180_000L, DiscordPublishRetryPolicy.delayMs(0, 180_000L))
     }
 
+    @Test fun periodicRefreshRespectsSdkRetryAfter() {
+        org.junit.Assert.assertFalse(DiscordPublishRetryPolicy.canPeriodicRefresh(90_000L, -1L))
+        org.junit.Assert.assertTrue(DiscordPublishRetryPolicy.canPeriodicRefresh(95_000L, -1L))
+        org.junit.Assert.assertFalse(DiscordPublishRetryPolicy.canPeriodicRefresh(95_000L, 180_000L))
+        org.junit.Assert.assertTrue(DiscordPublishRetryPolicy.canPeriodicRefresh(180_000L, 180_000L))
+    }
+
     @Test fun avoidsRetryForPermanentFailureOrExceededBudget() {
         assertNull(DiscordPublishRetryPolicy.delayMs(0, -1L))
         assertNull(DiscordPublishRetryPolicy.delayMs(3, 15_000L))
