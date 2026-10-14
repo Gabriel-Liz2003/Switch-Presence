@@ -52,6 +52,12 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = SecureSettings(this)
+        // An Android force-stop may kill the service without onDestroy().
+        // SharedPreferences might still say "running", but a fresh process has no active service.
+        if (settings.running && !PresenceService.isActive) {
+            settings.running = false
+            settings.status = "Monitoramento parado."
+        }
         DiscordBridge.initialize(this)
         window.statusBarColor = bg
         window.navigationBarColor = bg
