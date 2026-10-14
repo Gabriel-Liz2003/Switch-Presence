@@ -134,3 +134,11 @@ Fix the **Reconectar Discord** foreground notification action to re-publish an a
 - Tests cover the lightweight/full offline cleanup scheduling policy. The Discord API still does not provide a completion callback for `ClearRichPresence()`, so these changes require actual-device verification and are not guaranteed to fix every Android RPC failure.
 
 The nxapi polling interval and game-detection logic are unchanged.
+
+## Automatic retry for intermittent RPCError (v0.1.9 / next signed release)
+
+When the Nintendo game is detected but Discord's `UpdateRichPresence` callback fails, the service now consults `ClientResult::Retryable()` and `RetryAfter()` instead of waiting up to 90 seconds for the next routine refresh. A previously observed `RPCError (code 0)` also qualifies for a guarded retry because the same user's Android client later successfully published a game after that exact error.
+
+Retries use conservative 15s / 30s / 60s backoff with a maximum of three additional attempts per routine publication; an SDK-provided longer `RetryAfter` must be honored even by the normal periodic 90-second refresh. All native publish calls remain on the single service callback executor. The retry state resets after successful publication, on a new game, on offline detection, or on service restart. The app displays a countdown before the next eligible retry; no new permission, Discord token, or polling frequency is required.
+
+This change targets transient publication failures, **not** Nintendo game detection or offline clearing (the latter was addressed in v1.0.9). A device test is necessary to confirm that it improves the Discord Android RPC behavior.
