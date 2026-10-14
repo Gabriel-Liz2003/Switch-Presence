@@ -166,6 +166,8 @@ class MainActivity : Activity() {
         super.onResume()
         handler.removeCallbacks(heartbeat)
         handler.post(heartbeat)
+        // Continue installation without downloading the APK again after Android permission.
+        ReleaseUpdater.resumePendingInstall(this, ::setUpdateMessage)
     }
     override fun onPause() {
         handler.removeCallbacks(heartbeat)

@@ -1,0 +1,97 @@
+name: Publish signed Android updates
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: switchpresence-production-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build signed APK and publish GitHub Release
+    if: github.ref == 'refs/heads/main' && vars.RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    env:
+      REQUIRE_DISCORD_SDK: 'true'
+      DISCORD_SDK_PRIVATE_REPO: ${{ vars.DISCORD_SDK_PRIVATE_REPO }}
+      DISCORD_SDK_READ_TOKEN: ${{ secrets.DISCORD_SDK_READ_TOKEN }}
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      ANDROID_SIGNING_KEY_ALIAS: switchpresence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android build tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Verify private secrets and calculate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DISCORD_SDK_PRIVATE_REPO DISCORD_SDK_READ_TOKEN ANDROID_KEYSTORE_B64 ANDROID_SIGNING_STORE_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing protected release setting: $name"
+              exit 1
+            fi
+          done
+          if ! [[ "$GITHUB_RUN_NUMBER" =~ ^[0-9]+$ ]]; then exit 1; fi
+          app_version="1.0.$GITHUB_RUN_NUMBER"
+          version_code="$((100000 + GITHUB_RUN_NUMBER))"
+          echo "APP_RELEASE_VERSION=$app_version" >> "$GITHUB_ENV"
+          echo "APP_RELEASE_CODE=$version_code" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$app_version" >> "$GITHUB_ENV"
+      - name: Retrieve and verify privately stored Discord SDK
+        shell: bash
+        run: bash scripts/download_private_sdk.sh
+      - name: Load permanent Android signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/switchpresence-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          keytool -list -keystore "$keystore" -storepass "$ANDROID_SIGNING_STORE_PASSWORD" -alias "$ANDROID_SIGNING_KEY_ALIAS" > /dev/null
+          # Public certificate fingerprint prevents accidental signing-key rotation.
+          fingerprint="$(keytool -exportcert -keystore "$keystore" -storepass "$ANDROID_SIGNING_STORE_PASSWORD" -alias "$ANDROID_SIGNING_KEY_ALIAS" | sha256sum | cut -d' ' -f1)"
+          if [ "$fingerprint" != "6bd9bbb8d2785abf6ad4d152e725f9ca4327d845c85ce795dbd8d6b6000abd6a" ]; then
+            echo "::error::Signing certificate changed: refusing an incompatible release."
+            exit 1
+          fi
+          echo "ANDROID_SIGNING_KEYSTORE=$keystore" >> "$GITHUB_ENV"
+      - name: Build signed APK with official SDK
+        run: gradle --no-daemon assembleRelease
+      - name: Verify APK signature, publish checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          test -s "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          cp "$apk" SwitchPresence.apk
+          sha256sum SwitchPresence.apk > SwitchPresence.sha256
+      - name: Publish stable update to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Switch Presence ${{ env.APP_RELEASE_VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            SwitchPresence.apk
+            SwitchPresence.sha256

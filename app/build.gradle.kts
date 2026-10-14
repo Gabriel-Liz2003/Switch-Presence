@@ -16,8 +16,10 @@ android {
         applicationId = "dev.gabriel.switchpresence"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.1"
+        // Stable Releases inject monotonically increasing versions from GitHub Actions.
+        // Local/debug builds retain the source version.
+        versionCode = System.getenv("APP_RELEASE_CODE")?.toIntOrNull() ?: 2
+        versionName = System.getenv("APP_RELEASE_VERSION") ?: "0.1.1"
         ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("boolean", "HAS_DISCORD_SDK", hasDiscordSdk.toString())
         if (hasDiscordSdk) {
