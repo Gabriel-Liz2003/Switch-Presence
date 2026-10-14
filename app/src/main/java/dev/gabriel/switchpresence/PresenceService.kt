@@ -31,7 +31,7 @@ class PresenceService : Service() {
     private var lastPublishedElapsed = 0L
     private var offlineClearAttempts = 0
     private var errors = 0
-    private var stopping = false
+    @Volatile private var stopping = false
     private lateinit var settings: SecureSettings
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -96,6 +96,7 @@ class PresenceService : Service() {
             if (stopping) return@scheduleWithFixedDelay
             try {
                 val game = Nxapi.fetch(url)
+                if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
                     lastGame = null
