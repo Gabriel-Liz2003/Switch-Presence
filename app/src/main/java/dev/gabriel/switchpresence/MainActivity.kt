@@ -38,8 +38,13 @@ class MainActivity : Activity() {
     private val heartbeat = object : Runnable {
         override fun run() {
             status.text = settings.status
-            syncButton.text = if (settings.running) "■  PARAR MONITORAMENTO" else "▶  INICIAR MONITORAMENTO"
-            syncButton.background = background(if (settings.running) surface else accent, 16)
+            syncButton.isEnabled = !stoppingUi
+            syncButton.text = when {
+                stoppingUi -> "■  PARANDO MONITORAMENTO..."
+                settings.running -> "■  PARAR MONITORAMENTO"
+                else -> "▶  INICIAR MONITORAMENTO"
+            }
+            syncButton.background = background(if (settings.running || stoppingUi) surface else accent, 16)
             handler.postDelayed(this, 1600L)
         }
     }
