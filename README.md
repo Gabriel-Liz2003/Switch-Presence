@@ -123,3 +123,14 @@ To improve reliability on aggressive Android battery managers, allow **unrestric
 On Android, the official Social SDK sometimes returns an unsuccessful `UpdateRichPresence` callback with an **empty** `ClientResult::Error()` message. Display the SDK-provided `ClientResult::Type()` error category and numeric `ErrorCode()` instead of a misleading empty `Discord recusou:` label. A failed callback is **not** proof of an account ban or a wrong Application ID. Common categories include `RPCError`, `ClientNotReady`, `NetworkError` and `ValidationError`. No Discord access tokens are stored or exposed by these diagnostics.
 
 Fix the **Reconectar Discord** foreground notification action to re-publish an active game's presence after reinitializing the RPC client. Previously it always asked Discord to **clear** presence even with a game active. A generation check prevents republishing after a newer offline detection. Real Discord mobile/client behavior still requires device testing. If publishing fails, launch the installed Discord Android app and confirm that the account is signed in before retrying. Never share private nxapi URLs in issue reports or screenshots.
+
+## Offline Discord presence cleanup (v0.1.8)
+
+**Device regression:** Nintendo nxapi detected `Switch offline` after exiting The Witcher 3, but the Discord profile continued showing the game for over 7 minutes; manual `Reconectar Discord` reported only that cleanup was requested. Pressing **Parar monitoramento**, by contrast, removed the Discord activity after a short delay.
+
+- The original service sent one `ClearRichPresence()` per offline poll and **destroyed/recreated the native `Client` after two offline polls (and every eighth poll thereafter)**. That can lose the RPC session that originally published the activity before the clear is observed.
+- On initial offline detection, **retain the original client**, send two clear requests and process the SDK callback queue three times between each request, 150 ms apart, matching the successful service stop pathway. Continue lightweight clears every 45 seconds and a full callback drain only once every eighth offline poll. Never automatically reset the native client merely because the Switch remains offline.
+- The manual `LIMPAR PRESENÇA` operation clears on the existing RPC client. The notification's **Reconectar Discord** action first attempts cleanup on the original session *before* rebuilding the client, so it cannot replace the publishing client prior to attempting removal. Publication after the console resumes is guarded from late offline cleanup tasks.
+- Tests cover the lightweight/full offline cleanup scheduling policy. The Discord API still does not provide a completion callback for `ClearRichPresence()`, so these changes require actual-device verification and are not guaranteed to fix every Android RPC failure.
+
+The nxapi polling interval and game-detection logic are unchanged.
