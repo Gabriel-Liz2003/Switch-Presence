@@ -12,8 +12,12 @@ data class SwitchGame(val title: String, val imageUrl: String, val platform: Str
             val presence = root.optJSONObject("friend")?.optJSONObject("presence")
                 ?: error("A resposta do nxapi não contém friend.presence")
             val state = presence.optString("state").uppercase()
+            // Nintendo's presence enum includes PLAYING as well as ONLINE.
+            // ONLINE without an active game is valid and produces no Discord activity.
             if (state == "OFFLINE" || state == "INACTIVE") return null
-            if (state != "ONLINE") error("Estado de presença desconhecido")
+            if (state != "ONLINE" && state != "PLAYING") {
+                error("Estado de presença não suportado: ${state.take(24)}")
+            }
             val game = presence.optJSONObject("game") ?: return null
             val name = game.optString("name").trim()
             if (name.isBlank()) return null
