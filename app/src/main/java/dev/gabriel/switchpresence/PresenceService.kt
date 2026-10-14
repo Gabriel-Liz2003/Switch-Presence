@@ -224,10 +224,14 @@ class PresenceService : Service() {
                                         lastActiveGame === stalledGame) {
                                     settings.status = "$summary • Discord sem resposta; reconexão automática " +
                                         "$automaticReconnects/${DiscordTimeoutRecoveryPolicy.MAX_RECONNECTS}"
-                                    if (DiscordBridge.setup(settings.discordId)) {
+                                    val connected = DiscordBridge.setup(settings.discordId)
+                                    // Nintendo polling can complete while native setup is running.
+                                    // Never republish a game if its presence has since gone offline.
+                                    if (connected && !stopping && generation == presenceGeneration.get() &&
+                                            lastActiveGame === stalledGame) {
                                         // Do not clear here: a game is currently active.
                                         DiscordBridge.publish(stalledGame, startedAt)
-                                    } else {
+                                    } else if (!connected && !stopping && lastActiveGame === stalledGame) {
                                         settings.status = "$summary • Falha ao reconectar automaticamente ao Discord"
                                     }
                                 }
