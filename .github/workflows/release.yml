@@ -64,6 +64,12 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$keystore"
           chmod 600 "$keystore"
           keytool -list -keystore "$keystore" -storepass "$ANDROID_SIGNING_STORE_PASSWORD" -alias "$ANDROID_SIGNING_KEY_ALIAS" > /dev/null
+          # Public certificate fingerprint prevents accidental signing-key rotation.
+          fingerprint="$(keytool -exportcert -keystore "$keystore" -storepass "$ANDROID_SIGNING_STORE_PASSWORD" -alias "$ANDROID_SIGNING_KEY_ALIAS" | sha256sum | cut -d' ' -f1)"
+          if [ "$fingerprint" != "6bd9bbb8d2785abf6ad4d152e725f9ca4327d845c85ce795dbd8d6b6000abd6a" ]; then
+            echo "::error::Signing certificate changed: refusing an incompatible release."
+            exit 1
+          fi
           echo "ANDROID_SIGNING_KEYSTORE=$keystore" >> "$GITHUB_ENV"
       - name: Build signed APK with official SDK
         run: gradle --no-daemon assembleRelease
