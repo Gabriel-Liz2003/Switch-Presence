@@ -31,11 +31,33 @@ class PresenceService : Service() {
     @Volatile private var lastPublishedElapsed = 0L
     @Volatile private var activeGameSummary: String? = null
     private var errors = 0
+    private var offlinePolls = 0
+    @Volatile private var presenceGeneration = 0L
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
     private lateinit var settings: SecureSettings
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * The SDK is owned by the long-lived foreground service, never the Activity.
+     * Run all native RPC requests and RunCallbacks() on the same executor so
+     * callback processing does not race a publish/clear/reconnect request.
+     */
+    private fun enqueueDiscord(action: () -> Unit) {
+        if (!DiscordBridge.supported || callbacks.isShutdown) return
+        try {
+            callbacks.execute {
+                try {
+                    action()
+                    DiscordBridge.pump()
+                } catch (e: Exception) {
+                    if (!stopping) settings.status =
+                        "Discord indisponível: ${e.message ?: "falha de comunicação"}"
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -57,6 +79,7 @@ class PresenceService : Service() {
                     settings.status = "Monitoramento parado; remoção solicitada ao Discord."
                     pollTask?.cancel(true)
                     pollTask = null
+                    presenceGeneration++
                     activeGameSummary = null
 
                     if (DiscordBridge.supported) {
@@ -85,8 +108,18 @@ class PresenceService : Service() {
             }
             ACTION_CLEAR -> {
                 if (pollTask != null && !stopping) {
-                    clearDiscord("Limpeza manual solicitada ao Discord")
-                    // If still online the following poll may legitimately publish again.
+                    presenceGeneration++
+                    // Repair RPC session before asking Discord to forget stale activity.
+                    enqueueDiscord {
+                        if (DiscordBridge.setup(settings.discordId)) {
+                            DiscordBridge.clear()
+                            if (activeGameSummary == null)
+                                settings.status = "Switch offline • aguardando próximo jogo"
+                            else settings.status = "Limpeza solicitada; um jogo ativo pode reaparecer"
+                        } else {
+                            settings.status = "Não foi possível reconectar ao Discord"
+                        }
+                    }
                     lastGame = null
                     lastPublishedElapsed = 0L
                 }
@@ -111,6 +144,7 @@ class PresenceService : Service() {
         }
 
         isActive = true
+        offlinePolls = 0
         settings.running = true
         settings.status = if (DiscordBridge.supported) "Conectando à Nintendo e ao Discord..."
                           else "Modo prévia: lendo Nintendo sem publicar no Discord."
@@ -137,6 +171,8 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
+                    presenceGeneration++
+                    offlinePolls++
                     activeGameSummary = null
                     lastGame = null
                     gameStartedAt = 0L
@@ -144,17 +180,20 @@ class PresenceService : Service() {
                     // Retry the clear in the background on every offline poll, even
                     // after an app restart. ClearRichPresence() has no callback;
                     // do not imply that the app is waiting for Discord to respond.
+                    settings.status = "Switch offline • aguardando próximo jogo"
                     if (DiscordBridge.supported) {
-                        try {
-                            DiscordBridge.clear()
-                            settings.status = "Switch offline • aguardando próximo jogo"
-                        } catch (error: Exception) {
-                            settings.status = "Switch offline • falha ao limpar Discord: ${error.message ?: "erro"}"
+                        val repairTransport = offlinePolls == 2 || (offlinePolls > 2 && offlinePolls % 8 == 0)
+                        enqueueDiscord {
+                            if (repairTransport && !DiscordBridge.setup(settings.discordId)) {
+                                settings.status = "Discord desconectado • abra o Discord no celular"
+                            } else {
+                                // Clear through a live/rebuilt transport; this API has no ack.
+                                DiscordBridge.clear()
+                            }
                         }
-                    } else {
-                        settings.status = "Switch offline • aguardando próximo jogo"
                     }
                 } else {
+                    offlinePolls = 0
                     activeGameSummary = "Jogando: ${game.title} • ${game.platform}"
                     val changed = game.title != lastGame
                     if (changed) {
@@ -163,8 +202,15 @@ class PresenceService : Service() {
                     }
                     if (DiscordBridge.supported && (changed ||
                             SystemClock.elapsedRealtime() - lastPublishedElapsed > 90_000)) {
-                        DiscordBridge.publish(game, gameStartedAt)
+                        val generation = ++presenceGeneration
+                        val started = gameStartedAt
                         lastPublishedElapsed = SystemClock.elapsedRealtime()
+                        enqueueDiscord {
+                            // A late publish after an offline poll would reintroduce stale activity.
+                            if (!stopping && generation == presenceGeneration) {
+                                DiscordBridge.publish(game, started)
+                            }
+                        }
                     }
                     val summary = activeGameSummary.orEmpty()
                     settings.status = if (DiscordBridge.supported) {
@@ -183,8 +229,9 @@ class PresenceService : Service() {
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
+                    presenceGeneration++
                     if (DiscordBridge.supported) {
-                        clearDiscord("Sem dados Nintendo: limpeza solicitada ao Discord")
+                        enqueueDiscord { DiscordBridge.clear() }
                     }
                 }
             }
