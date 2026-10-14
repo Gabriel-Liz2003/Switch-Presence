@@ -28,7 +28,8 @@ class PresenceService : Service() {
     private var callbackTask: ScheduledFuture<*>? = null
     private var lastGame: String? = null
     private var gameStartedAt = 0L
-    private var lastPublishedElapsed = 0L
+    @Volatile private var lastPublishedElapsed = 0L
+    @Volatile private var activeGameSummary: String? = null
     private var errors = 0
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
@@ -56,6 +57,7 @@ class PresenceService : Service() {
                     settings.status = "Monitoramento parado; remoção solicitada ao Discord."
                     pollTask?.cancel(true)
                     pollTask = null
+                    activeGameSummary = null
 
                     if (DiscordBridge.supported) {
                         try {
@@ -114,8 +116,19 @@ class PresenceService : Service() {
                           else "Modo prévia: lendo Nintendo sem publicar no Discord."
         if (DiscordBridge.supported) {
             callbackTask = callbacks.scheduleWithFixedDelay({
-                try { DiscordBridge.pump() } catch (_: Exception) {}
-            }, 0, 500, TimeUnit.MILLISECONDS)
+                try {
+                    DiscordBridge.pump()
+                    // Rich Presence results are delivered later, not during publish().
+                    // Surface the callback result without waiting for the 45-second nxapi poll.
+                    val summary = activeGameSummary
+                    if (!stopping && summary != null) {
+                        val elapsed = (SystemClock.elapsedRealtime() - lastPublishedElapsed).coerceAtLeast(0L)
+                        val message = "$summary • " +
+                            DiscordStatusText.describe(DiscordBridge.status(), elapsed)
+                        if (settings.status != message) settings.status = message
+                    }
+                } catch (_: Exception) {}
+            }, 0, 1, TimeUnit.SECONDS)
         }
         pollTask = polling.scheduleWithFixedDelay({
             if (stopping) return@scheduleWithFixedDelay
@@ -124,6 +137,7 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
+                    activeGameSummary = null
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
@@ -141,6 +155,7 @@ class PresenceService : Service() {
                         settings.status = "Switch offline • aguardando próximo jogo"
                     }
                 } else {
+                    activeGameSummary = "Jogando: ${game.title} • ${game.platform}"
                     val changed = game.title != lastGame
                     if (changed) {
                         lastGame = game.title
@@ -151,15 +166,20 @@ class PresenceService : Service() {
                         DiscordBridge.publish(game, gameStartedAt)
                         lastPublishedElapsed = SystemClock.elapsedRealtime()
                     }
-                    settings.status = (if (DiscordBridge.supported) "Jogando" else "Prévia") +
-                        ": ${game.title} • ${game.platform}" +
-                        (if (DiscordBridge.supported) " • ${DiscordBridge.status()}" else "")
+                    val summary = activeGameSummary.orEmpty()
+                    settings.status = if (DiscordBridge.supported) {
+                        val elapsed = (SystemClock.elapsedRealtime() - lastPublishedElapsed).coerceAtLeast(0L)
+                        "$summary • ${DiscordStatusText.describe(DiscordBridge.status(), elapsed)}"
+                    } else {
+                        "Prévia: ${game.title} • ${game.platform}"
+                    }
                 }
             } catch (error: Exception) {
                 if (stopping) return@scheduleWithFixedDelay
                 errors++
                 settings.status = "Falha nxapi ($errors): ${error.message ?: "sem conexão"}"
                 if (errors >= 3) {
+                    activeGameSummary = null
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
@@ -203,6 +223,7 @@ class PresenceService : Service() {
 
     override fun onDestroy() {
         stopping = true
+        activeGameSummary = null
         isActive = false
         // Mark stopped BEFORE closing executors; native Discord calls must not block UI state.
         settings.running = false
