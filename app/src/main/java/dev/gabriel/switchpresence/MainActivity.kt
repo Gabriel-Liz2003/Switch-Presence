@@ -33,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var updateStatus: TextView
     private var updaterBusy = false
+    private var stoppingUi = false
 
     private val heartbeat = object : Runnable {
         override fun run() {
