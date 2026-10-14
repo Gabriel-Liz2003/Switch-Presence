@@ -126,18 +126,20 @@ class PresenceService : Service() {
                     val generation = presenceGeneration.incrementAndGet()
                     settings.status = "Reconectando o Discord..."
                     enqueueDiscord {
-                        if (!DiscordBridge.setup(settings.discordId)) {
-                            settings.status = "Falha ao reiniciar a conexão Discord"
-                        } else if (!stopping && generation == presenceGeneration.get()) {
+                        if (!stopping && generation == presenceGeneration.get()) {
                             val active = lastActiveGame
                             if (active == null) {
+                                // First clear on the original session; only then try a new one.
                                 clearDiscordWithDrain()
-                                settings.status = "Switch offline • limpeza solicitada ao Discord"
-                            } else {
+                                if (DiscordBridge.setup(settings.discordId)) {
+                                    clearDiscordWithDrain()
+                                    settings.status = "Switch offline • limpeza solicitada ao Discord"
+                                } else settings.status = "Falha ao reconectar ao Discord"
+                            } else if (DiscordBridge.setup(settings.discordId)) {
                                 // A reconnect while playing must republish, not clear the game.
                                 lastPublishedElapsed = SystemClock.elapsedRealtime()
                                 DiscordBridge.publish(active, gameStartedAt)
-                            }
+                            } else settings.status = "Falha ao reconectar ao Discord"
                         }
                     }
                 }
@@ -204,7 +206,7 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
-                    presenceGeneration.incrementAndGet()
+                    val clearGeneration = presenceGeneration.incrementAndGet()
                     offlinePolls++
                     activeGameSummary = null
                     lastActiveGame = null
@@ -217,12 +219,13 @@ class PresenceService : Service() {
                     settings.status = "Switch offline • aguardando próximo jogo"
                     updateForegroundNotice("Switch offline • checando Discord")
                     if (DiscordBridge.supported) {
-                        val firstOfflinePoll = offlinePolls == 1
+                        val thoroughClear = OfflineClearPolicy.shouldDrainCallbacks(offlinePolls)
                         enqueueDiscord {
-                            // Do not replace the Client every few offline polls: it may
-                            // still own the activity we are trying to remove.
-                            if (firstOfflinePoll) clearDiscordWithDrain()
-                            else DiscordBridge.clear()
+                            if (!stopping && clearGeneration == presenceGeneration.get()) {
+                                // Do not replace the Client during automatic offline polling.
+                                if (thoroughClear) clearDiscordWithDrain()
+                                else DiscordBridge.clear()
+                            }
                         }
                     }
                 } else {
