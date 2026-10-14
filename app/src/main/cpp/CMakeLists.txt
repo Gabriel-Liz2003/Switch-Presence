@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(switchpresence)
+add_library(switchpresence SHARED presence_jni.cpp)
+find_package(discord_partner_sdk REQUIRED CONFIG)
+target_link_libraries(switchpresence PRIVATE discord_partner_sdk::discord_partner_sdk log)

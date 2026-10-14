@@ -1,0 +1,13 @@
+# Android / IDE
+.gradle/
+.idea/
+local.properties
+**/build/
+*.iml
+.DS_Store
+# Licensed binary: obtain directly from Discord Developer Portal
+app/libs/*.aar
+# Do not commit signing identities or secrets
+*.jks
+*.keystore
+.env
