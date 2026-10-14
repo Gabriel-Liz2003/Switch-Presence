@@ -33,12 +33,18 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var updateStatus: TextView
     private var updaterBusy = false
+    private var stoppingUi = false
 
     private val heartbeat = object : Runnable {
         override fun run() {
             status.text = settings.status
-            syncButton.text = if (settings.running) "■  PARAR MONITORAMENTO" else "▶  INICIAR MONITORAMENTO"
-            syncButton.background = background(if (settings.running) surface else accent, 16)
+            syncButton.isEnabled = !stoppingUi
+            syncButton.text = when {
+                stoppingUi -> "■  PARANDO MONITORAMENTO..."
+                settings.running -> "■  PARAR MONITORAMENTO"
+                else -> "▶  INICIAR MONITORAMENTO"
+            }
+            syncButton.background = background(if (settings.running || stoppingUi) surface else accent, 16)
             handler.postDelayed(this, 1600L)
         }
     }
@@ -46,6 +52,12 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = SecureSettings(this)
+        // An Android force-stop may kill the service without onDestroy().
+        // SharedPreferences might still say "running", but a fresh process has no active service.
+        if (settings.running && !PresenceService.isActive) {
+            settings.running = false
+            settings.status = "Monitoramento parado."
+        }
         DiscordBridge.initialize(this)
         window.statusBarColor = bg
         window.navigationBarColor = bg
@@ -192,10 +204,24 @@ class MainActivity : Activity() {
 
     private fun toggle() {
         if (settings.running) {
-            // Use a STOP intent so the SDK can dispatch the clear before service shutdown.
-            startService(Intent(this, PresenceService::class.java)
-                .setAction(PresenceService.ACTION_STOP))
-            settings.status = "Parando e limpando a atividade do Discord..."
+            // Reflect the stop immediately; native Discord RPC may still be pending.
+            stoppingUi = true
+            settings.running = false
+            settings.status = "Parando monitoramento e solicitando remoção no Discord..."
+            try {
+                startService(Intent(this, PresenceService::class.java)
+                    .setAction(PresenceService.ACTION_STOP))
+            } catch (_: Exception) {
+                stopService(Intent(this, PresenceService::class.java))
+            }
+            // Safety fallback if Android did not deliver the stop intent.
+            handler.postDelayed({
+                stopService(Intent(this, PresenceService::class.java))
+                stoppingUi = false
+                settings.running = false
+                settings.status = "Monitoramento parado. O Discord pode levar a atualizar."
+                status.text = settings.status
+            }, 2_500L)
             return
         }
         if (!persist(DiscordBridge.supported)) return
