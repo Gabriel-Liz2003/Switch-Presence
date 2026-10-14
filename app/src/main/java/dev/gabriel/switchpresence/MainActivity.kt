@@ -166,7 +166,14 @@ class MainActivity : Activity() {
         root.addView(updateStatus)
         root.addView(space(22))
 
-        root.addView(label("O Android pode restringir a sincronização em segundo plano. Mantenha o Discord instalado e conectado neste celular. A URL nxapi fica criptografada neste dispositivo.", muted, 12f))
+        root.addView(label("Para monitorar com o app fechado, configure Bateria → Sem restrições nas configurações do Switch Presence e também do Discord. Alguns aparelhos suspendem a comunicação com o Discord em segundo plano.", muted, 12f))
+        root.addView(space(9))
+        root.addView(link("Abrir configurações do Switch Presence ↗") {
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")))
+        })
+        root.addView(space(9))
+        root.addView(label("Sua URL nxapi continua armazenada de forma criptografada neste dispositivo.", muted, 12f))
         root.addView(space(12))
         root.addView(link("Ver código-fonte e versões ↗") {
             browse("https://github.com/Gabriel-Liz2003/Switch-Presence/releases")
@@ -176,6 +183,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // The Activity may have been destroyed while the foreground service kept running.
+        // Refresh the Discord SDK's Android Activity reference on every return to the UI.
+        DiscordBridge.initialize(this)
         handler.removeCallbacks(heartbeat)
         handler.post(heartbeat)
         // Continue installation without downloading the APK again after Android permission.
