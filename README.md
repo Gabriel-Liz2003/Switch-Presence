@@ -110,3 +110,4 @@ When a newer release does not exist, it shows the currently installed version. I
 - [x] Validate SDK binary structure and JNI C++ syntax against owner-supplied 1.10.19337 AAR
 - [x] End-to-end activity publication demonstrated on device (user report, The Witcher 3)
 - [ ] Confirm Discord actually removes stale activity after offline; SDK ClearRichPresence has no result callback
+- [ ] Verify v0.1.2 stop button on Android: running flag clears immediately, Nintendo polling stops and the service exits even if native SDK stalls; Discord may take longer to remove the activity.
