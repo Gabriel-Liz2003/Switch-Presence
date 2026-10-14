@@ -12,4 +12,8 @@ internal object DiscordPublishRetryPolicy {
         if (previousRetries !in localBackoffMs.indices || sdkRecommendedMs < 0L) return null
         return maxOf(localBackoffMs[previousRetries], sdkRecommendedMs)
     }
+
+    /** Periodic refresh must not override a server-suggested cooldown. */
+    fun canPeriodicRefresh(elapsedMs: Long, sdkRecommendedMs: Long): Boolean =
+        elapsedMs > 90_000L && (sdkRecommendedMs < 0L || elapsedMs >= sdkRecommendedMs)
 }
