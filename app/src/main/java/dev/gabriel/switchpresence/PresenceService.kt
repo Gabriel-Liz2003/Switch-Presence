@@ -34,6 +34,7 @@ class PresenceService : Service() {
     @Volatile private var activeGameSummary: String? = null
     private var errors = 0
     private var offlinePolls = 0
+    @Volatile private var failedPublishRetries = 0
     private val presenceGeneration = AtomicLong(0L)
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
@@ -99,6 +100,7 @@ class PresenceService : Service() {
                     pollTask?.cancel(true)
                     pollTask = null
                     presenceGeneration.incrementAndGet()
+                    failedPublishRetries = 0
                     activeGameSummary = null
                     lastActiveGame = null
 
@@ -124,6 +126,7 @@ class PresenceService : Service() {
             ACTION_RECONNECT -> {
                 if (pollTask != null && !stopping && DiscordBridge.supported) {
                     val generation = presenceGeneration.incrementAndGet()
+                    failedPublishRetries = 0
                     settings.status = "Reconectando o Discord..."
                     enqueueDiscord {
                         if (!stopping && generation == presenceGeneration.get()) {
@@ -148,6 +151,7 @@ class PresenceService : Service() {
             ACTION_CLEAR -> {
                 if (pollTask != null && !stopping) {
                     presenceGeneration.incrementAndGet()
+                    failedPublishRetries = 0
                     // Clear using the original native RPC client (no premature reset).
                     enqueueDiscord {
                         clearDiscordWithDrain()
@@ -191,9 +195,34 @@ class PresenceService : Service() {
                     // Surface the callback result without waiting for the 45-second nxapi poll.
                     val summary = activeGameSummary
                     if (!stopping && summary != null) {
+                        val sdkStatus = DiscordBridge.status()
                         val elapsed = (SystemClock.elapsedRealtime() - lastPublishedElapsed).coerceAtLeast(0L)
+                        if (sdkStatus == "Atividade publicada") failedPublishRetries = 0
+                        val retryDelay = DiscordPublishRetryPolicy.delayMs(
+                            failedPublishRetries, DiscordBridge.retryDelayMs()
+                        )
+                        val game = lastActiveGame
+                        if (retryDelay != null && elapsed >= retryDelay && game != null && !stopping) {
+                            // Callback executor owns RPC calls. Do not create another Client:
+                            // the intermittent RPCError (code 0) can resolve on the same one.
+                            val generation = presenceGeneration.get()
+                            if (generation == presenceGeneration.get() && lastActiveGame === game) {
+                                failedPublishRetries++
+                                lastPublishedElapsed = SystemClock.elapsedRealtime()
+                                DiscordBridge.publish(game, gameStartedAt)
+                            }
+                        }
+                        val currentStatus = DiscordBridge.status()
+                        val currentElapsed = (SystemClock.elapsedRealtime() - lastPublishedElapsed).coerceAtLeast(0L)
+                        val awaitingRetry = DiscordPublishRetryPolicy.delayMs(
+                            failedPublishRetries, DiscordBridge.retryDelayMs()
+                        )
+                        val suffix = if (awaitingRetry != null && currentStatus.startsWith("Discord recusou:")) {
+                            val seconds = ((awaitingRetry - currentElapsed).coerceAtLeast(0L) + 999L) / 1000L
+                            " • nova tentativa em ${seconds}s"
+                        } else ""
                         val message = "$summary • " +
-                            DiscordStatusText.describe(DiscordBridge.status(), elapsed)
+                            DiscordStatusText.describe(currentStatus, currentElapsed) + suffix
                         if (settings.status != message) settings.status = message
                     }
                 } catch (_: Exception) {}
@@ -208,6 +237,7 @@ class PresenceService : Service() {
                 if (game == null) {
                     val clearGeneration = presenceGeneration.incrementAndGet()
                     offlinePolls++
+                    failedPublishRetries = 0
                     activeGameSummary = null
                     lastActiveGame = null
                     lastGame = null
@@ -237,11 +267,13 @@ class PresenceService : Service() {
                     if (changed) {
                         lastGame = game.title
                         gameStartedAt = System.currentTimeMillis()
+                        failedPublishRetries = 0
                     }
                     if (DiscordBridge.supported && (changed ||
                             SystemClock.elapsedRealtime() - lastPublishedElapsed > 90_000)) {
                         val generation = presenceGeneration.incrementAndGet()
                         val started = gameStartedAt
+                        failedPublishRetries = 0
                         lastPublishedElapsed = SystemClock.elapsedRealtime()
                         enqueueDiscord {
                             // A late publish after an offline poll would reintroduce stale activity.
@@ -269,6 +301,7 @@ class PresenceService : Service() {
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
+                    failedPublishRetries = 0
                     presenceGeneration.incrementAndGet()
                     if (DiscordBridge.supported) {
                         enqueueDiscord { DiscordBridge.clear() }
