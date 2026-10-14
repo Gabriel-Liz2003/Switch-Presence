@@ -243,17 +243,6 @@ class PresenceService : Service() {
         return START_STICKY
     }
 
-    private fun clearDiscord(label: String) {
-        try {
-            if (DiscordBridge.supported) {
-                DiscordBridge.clear()
-                settings.status = "$label (sem confirmação do Discord)"
-            }
-        } catch (e: Exception) {
-            settings.status = "Falha ao limpar Discord: ${e.message ?: "desconhecida"}"
-        }
-    }
-
     private fun foregroundNotification(detail: String): Notification {
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
@@ -276,8 +265,9 @@ class PresenceService : Service() {
 
     private fun updateForegroundNotice(detail: String) {
         try {
+            val time = android.text.format.DateFormat.format("HH:mm", System.currentTimeMillis())
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(30, foregroundNotification(detail))
+                .notify(30, foregroundNotification("$detail • $time"))
         } catch (_: Exception) { /* Notification permission may be denied. */ }
     }
 
