@@ -198,10 +198,24 @@ class MainActivity : Activity() {
 
     private fun toggle() {
         if (settings.running) {
-            // Use a STOP intent so the SDK can dispatch the clear before service shutdown.
-            startService(Intent(this, PresenceService::class.java)
-                .setAction(PresenceService.ACTION_STOP))
-            settings.status = "Parando e limpando a atividade do Discord..."
+            // Reflect the stop immediately; native Discord RPC may still be pending.
+            stoppingUi = true
+            settings.running = false
+            settings.status = "Parando monitoramento e solicitando remoção no Discord..."
+            try {
+                startService(Intent(this, PresenceService::class.java)
+                    .setAction(PresenceService.ACTION_STOP))
+            } catch (_: Exception) {
+                stopService(Intent(this, PresenceService::class.java))
+            }
+            // Safety fallback if Android did not deliver the stop intent.
+            handler.postDelayed({
+                stopService(Intent(this, PresenceService::class.java))
+                stoppingUi = false
+                settings.running = false
+                settings.status = "Monitoramento parado. O Discord pode levar a atualizar."
+                status.text = settings.status
+            }, 2_500L)
             return
         }
         if (!persist(DiscordBridge.supported)) return
