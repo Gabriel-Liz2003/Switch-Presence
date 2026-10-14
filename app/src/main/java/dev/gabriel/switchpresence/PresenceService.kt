@@ -28,7 +28,8 @@ class PresenceService : Service() {
     private var pollTask: ScheduledFuture<*>? = null
     private var callbackTask: ScheduledFuture<*>? = null
     private var lastGame: String? = null
-    private var gameStartedAt = 0L
+    @Volatile private var gameStartedAt = 0L
+    @Volatile private var lastActiveGame: SwitchGame? = null
     @Volatile private var lastPublishedElapsed = 0L
     @Volatile private var activeGameSummary: String? = null
     private var errors = 0
@@ -82,6 +83,7 @@ class PresenceService : Service() {
                     pollTask = null
                     presenceGeneration.incrementAndGet()
                     activeGameSummary = null
+                    lastActiveGame = null
 
                     if (DiscordBridge.supported) {
                         try {
@@ -106,6 +108,28 @@ class PresenceService : Service() {
                     stopSelf()
                 }
                 return START_NOT_STICKY
+            }
+            ACTION_RECONNECT -> {
+                if (pollTask != null && !stopping && DiscordBridge.supported) {
+                    val generation = presenceGeneration.incrementAndGet()
+                    settings.status = "Reconectando o Discord..."
+                    enqueueDiscord {
+                        if (!DiscordBridge.setup(settings.discordId)) {
+                            settings.status = "Falha ao reiniciar a conexão Discord"
+                        } else if (!stopping && generation == presenceGeneration.get()) {
+                            val active = lastActiveGame
+                            if (active == null) {
+                                DiscordBridge.clear()
+                                settings.status = "Switch offline • limpeza solicitada ao Discord"
+                            } else {
+                                // A reconnect while playing must republish, not clear the game.
+                                lastPublishedElapsed = SystemClock.elapsedRealtime()
+                                DiscordBridge.publish(active, gameStartedAt)
+                            }
+                        }
+                    }
+                }
+                return START_STICKY
             }
             ACTION_CLEAR -> {
                 if (pollTask != null && !stopping) {
@@ -175,6 +199,7 @@ class PresenceService : Service() {
                     presenceGeneration.incrementAndGet()
                     offlinePolls++
                     activeGameSummary = null
+                    lastActiveGame = null
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
@@ -198,6 +223,7 @@ class PresenceService : Service() {
                     updateForegroundNotice("Jogando: ${game.title.take(70)}")
                     offlinePolls = 0
                     activeGameSummary = "Jogando: ${game.title} • ${game.platform}"
+                    lastActiveGame = game
                     val changed = game.title != lastGame
                     if (changed) {
                         lastGame = game.title
@@ -230,6 +256,7 @@ class PresenceService : Service() {
                 updateForegroundNotice("Falha ao consultar o nxapi • tentativa $errors")
                 if (errors >= 3) {
                     activeGameSummary = null
+                    lastActiveGame = null
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
@@ -250,7 +277,7 @@ class PresenceService : Service() {
             this, 1, Intent(this, javaClass).setAction(ACTION_STOP), flags
         )
         val repair = PendingIntent.getService(
-            this, 2, Intent(this, javaClass).setAction(ACTION_CLEAR), flags
+            this, 2, Intent(this, javaClass).setAction(ACTION_RECONNECT), flags
         )
         return Notification.Builder(this, "presence")
             .setSmallIcon(R.drawable.app_icon)
@@ -281,6 +308,7 @@ class PresenceService : Service() {
     override fun onDestroy() {
         stopping = true
         activeGameSummary = null
+        lastActiveGame = null
         isActive = false
         // Mark stopped BEFORE closing executors; native Discord calls must not block UI state.
         settings.running = false
@@ -308,5 +336,6 @@ class PresenceService : Service() {
             private set
         const val ACTION_STOP = "dev.gabriel.switchpresence.STOP"
         const val ACTION_CLEAR = "dev.gabriel.switchpresence.CLEAR"
+        const val ACTION_RECONNECT = "dev.gabriel.switchpresence.RECONNECT"
     }
 }

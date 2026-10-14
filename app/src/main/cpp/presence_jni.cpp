@@ -12,6 +12,33 @@ std::unique_ptr<discordpp::Client> client;
 std::string status = "Discord não conectado";
 uint64_t presenceRevision = 0;
 
+// ClientResult::Error() may be empty even on a failure. Include the type and
+// numeric code so Android users can report the actual SDK failure category.
+const char* errorCategory(discordpp::ErrorType type) {
+    switch (type) {
+        case discordpp::ErrorType::None: return "None";
+        case discordpp::ErrorType::NetworkError: return "NetworkError";
+        case discordpp::ErrorType::HTTPError: return "HTTPError";
+        case discordpp::ErrorType::ClientNotReady: return "ClientNotReady";
+        case discordpp::ErrorType::Disabled: return "Disabled";
+        case discordpp::ErrorType::ClientDestroyed: return "ClientDestroyed";
+        case discordpp::ErrorType::ValidationError: return "ValidationError";
+        case discordpp::ErrorType::Aborted: return "Aborted";
+        case discordpp::ErrorType::AuthorizationFailed: return "AuthorizationFailed";
+        case discordpp::ErrorType::RPCError: return "RPCError";
+        default: return "Other";
+    }
+}
+
+std::string failureDetails(discordpp::ClientResult const& result) {
+    std::string details = std::string(errorCategory(result.Type())) +
+                          " (code " + std::to_string(result.ErrorCode()) + ")";
+    std::string description = result.Error();
+    if (description.empty()) description = result.ToString();
+    if (!description.empty()) details += ": " + description.substr(0, 100);
+    return details;
+}
+
 std::string utf(JNIEnv* env, jstring value) {
     if (!value) return "";
     const char* chars = env->GetStringUTFChars(value, nullptr);
@@ -76,7 +103,9 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativePublish(
     client->UpdateRichPresence(activity, [revision](discordpp::ClientResult result) {
         std::lock_guard<std::recursive_mutex> lock(guard);
         if (revision != presenceRevision) return;
-        status = result.Successful() ? "Atividade publicada" : "Discord recusou: " + result.Error().substr(0, 180);
+        status = result.Successful()
+            ? "Atividade publicada"
+            : "Discord recusou: " + failureDetails(result);
     });
 }
 
