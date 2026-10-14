@@ -14,6 +14,17 @@ Android app for showing **Nintendo Switch / Switch 2** game activity on your **o
 - **In-app updates:** checks `releases/latest`, compares versions, fetches APK + **required SHA-256**, verifies integrity, opens Android's standard installer after confirmation.
 - GitHub Actions: preview debug builds on pushes/PRs, separately gated release builds on `vX.Y.Z` tags.
 
+## SDK 1.10.19337 inspection (2026-10-13)
+
+The official `discord_partner_sdk.aar` supplied by the project owner was inspected **locally, without uploading it to this public repository**:
+
+- Contains `libs/discord_partner_sdk.jar`, `com.discord.socialsdk.DiscordSocialSdkInit.setEngineActivity(Activity)`, `prefab/modules/discord_partner_sdk/include/discordpp.h` and `cdiscord.h`.
+- Includes native binaries for `arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`; this app targets `arm64-v8a`.
+- The actual JNI bridge in `presence_jni.cpp` (including the SDK RPC methods) passed a C++17 **syntax-only** compilation against the supplied SDK headers and local JNI headers. **This is not an Android APK build nor an on-device functionality test.**
+- The AAR also declares microphone/voice permissions/services, which the app does not use. The app manifest removes these from the merged application manifest. Verify the merged manifest in a full build.
+
+For another local AAR, run `python3 scripts/verify_sdk.py /path/to/discord_partner_sdk.aar` to inspect packaging; do not post SDK binaries publicly.
+
 ## Set up your accounts
 
 1. Follow [nxapi presence API enrollment](https://github.com/samuelthomas2774/nxapi/discussions/155) at [nxapi-auth](https://nxapi-auth.fancy.org.uk/). Copy your personal **presence URL** (not the event-stream URL). Nintendo presence may be publicly exposed by nxapi — understand this before enrolling.
@@ -70,6 +81,6 @@ When a newer release does not exist, it shows the currently installed version. I
 - [x] Official SDK bridge (requires official AAR to link)
 - [x] GitHub Releases update checks, checksum and Android installer
 - [x] CI preview APK and guarded signed release workflow
-- [ ] Device validation of native Discord RPC
-- [ ] Validate SDK binary packaging/version against official AAR
+- [ ] Full Android NDK/Gradle build with official SDK and on-device RPC validation
+- [x] Validate SDK binary structure and JNI C++ syntax against owner-supplied 1.10.19337 AAR
 - [ ] End-to-end testing after nxapi enrollment
