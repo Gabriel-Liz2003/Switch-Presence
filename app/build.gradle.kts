@@ -18,8 +18,8 @@ android {
         targetSdk = 34
         // Stable Releases inject monotonically increasing versions from GitHub Actions.
         // Local/debug builds retain the source version.
-        versionCode = System.getenv("APP_RELEASE_CODE")?.toIntOrNull() ?: 3
-        versionName = System.getenv("APP_RELEASE_VERSION") ?: "0.1.2"
+        versionCode = System.getenv("APP_RELEASE_CODE")?.toIntOrNull() ?: 4
+        versionName = System.getenv("APP_RELEASE_VERSION") ?: "0.1.3"
         ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("boolean", "HAS_DISCORD_SDK", hasDiscordSdk.toString())
         if (hasDiscordSdk) {
