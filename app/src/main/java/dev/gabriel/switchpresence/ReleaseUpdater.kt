@@ -5,7 +5,6 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import org.json.JSONObject
@@ -24,6 +23,24 @@ object ReleaseUpdater {
     private const val DOWNLOAD_PREFIX =
         "https://github.com/Gabriel-Liz2003/Switch-Presence/releases/download/"
     private const val MAX_APK_BYTES = 150L * 1024 * 1024
+    // The APK must pass SHA-256 verification before requesting install permission.
+    private var pendingInstall: File? = null
+
+    fun resumePendingInstall(activity: Activity, status: (String) -> Unit) {
+        val apk = pendingInstall ?: return
+        if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) return
+        pendingInstall = null
+        try {
+            if (apk.isFile && apk.length() > 0) {
+                status("Permissão concedida. Confirme a instalação no Android.")
+                launchInstaller(activity, apk)
+            } else {
+                status("APK temporário indisponível. Verifique novamente.")
+            }
+        } catch (error: Exception) {
+            status("Não foi possível abrir o instalador: ${error.message ?: "erro"}")
+        }
+    }
 
     private data class Release(val version: String, val apk: String, val checksum: String)
 
@@ -119,8 +136,13 @@ object ReleaseUpdater {
                 }
                 activity.runOnUiThread {
                     status("APK conferido. Confirme a instalação no Android.")
-                    install(activity, target, status)
-                    finished()
+                    try {
+                        install(activity, target, status)
+                    } catch (error: Exception) {
+                        status("Não foi possível abrir o instalador: ${error.message ?: "erro"}")
+                    } finally {
+                        finished()
+                    }
                 }
             } catch (e: Exception) {
                 status("Falha na atualização: ${e.message ?: "download"}")
@@ -131,11 +153,16 @@ object ReleaseUpdater {
 
     private fun install(activity: Activity, apk: File, status: (String) -> Unit) {
         if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
-            status("Autorize instalação de apps desta fonte e verifique novamente.")
+            pendingInstall = apk
+            status("Autorize instalar apps desta fonte e volte ao Switch Presence.")
             activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                 Uri.parse("package:${activity.packageName}")))
             return
         }
+        launchInstaller(activity, apk)
+    }
+
+    private fun launchInstaller(activity: Activity, apk: File) {
         val uri = FileProvider.getUriForFile(activity,
             "${activity.packageName}.fileprovider", apk)
         val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -148,6 +175,9 @@ object ReleaseUpdater {
     private fun readText(url: String, max: Int): String {
         val conn = connection(url)
         try {
+            if (url == API && conn.responseCode == 404) {
+                error("Ainda não existe uma versão oficial em GitHub Releases.")
+            }
             require(conn.responseCode == 200) { "GitHub HTTP ${conn.responseCode}" }
             require(conn.contentLengthLong in -1L..max.toLong()) { "Resposta muito grande" }
             conn.inputStream.bufferedReader().use { reader ->
