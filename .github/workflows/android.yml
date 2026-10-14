@@ -34,6 +34,47 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+  full_preview:
+    name: Full SDK preview (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_SDK_PRIVATE_REPO: ${{ vars.DISCORD_SDK_PRIVATE_REPO }}
+      DISCORD_SDK_READ_TOKEN: ${{ secrets.DISCORD_SDK_READ_TOKEN }}
+      REQUIRE_DISCORD_SDK: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android SDK + NDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Download SDK from private repository
+        run: |
+          if ! [[ "$DISCORD_SDK_PRIVATE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [ -z "$DISCORD_SDK_READ_TOKEN" ]; then
+            echo "::error::Configure DISCORD_SDK_PRIVATE_REPO variable and DISCORD_SDK_READ_TOKEN secret."
+            exit 1
+          fi
+          mkdir -p app/libs
+          curl --fail --location --retry 2 --silent --show-error \
+            --header "Authorization: Bearer $DISCORD_SDK_READ_TOKEN" \
+            --header 'Accept: application/vnd.github.raw+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$DISCORD_SDK_PRIVATE_REPO/contents/discord_partner_sdk.aar" \
+            --output app/libs/discord_partner_sdk.aar
+          python3 scripts/verify_sdk.py app/libs/discord_partner_sdk.aar
+      - name: Build SDK-enabled APK
+        run: gradle --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SwitchPresence-FULL-debug-Discord
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
   release:
     name: Signed SDK-enabled release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -42,6 +83,8 @@ jobs:
       contents: write
     env:
       DISCORD_SDK_AAR_URL: ${{ secrets.DISCORD_SDK_AAR_URL }}
+      DISCORD_SDK_PRIVATE_REPO: ${{ vars.DISCORD_SDK_PRIVATE_REPO }}
+      DISCORD_SDK_READ_TOKEN: ${{ secrets.DISCORD_SDK_READ_TOKEN }}
       ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
       ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
       ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -61,19 +104,35 @@ jobs:
           gradle-version: '8.10.2'
       - name: Verify required secrets and tag
         run: |
-          for var in DISCORD_SDK_AAR_URL ANDROID_KEYSTORE_B64 ANDROID_SIGNING_STORE_PASSWORD ANDROID_SIGNING_KEY_ALIAS ANDROID_SIGNING_KEY_PASSWORD; do
+          for var in ANDROID_KEYSTORE_B64 ANDROID_SIGNING_STORE_PASSWORD ANDROID_SIGNING_KEY_ALIAS ANDROID_SIGNING_KEY_PASSWORD; do
             if [ -z "${!var}" ]; then
               echo "::error::Required secret missing: $var"
               exit 1
             fi
           done
+          if [ -z "$DISCORD_SDK_AAR_URL" ] && { [ -z "$DISCORD_SDK_PRIVATE_REPO" ] || [ -z "$DISCORD_SDK_READ_TOKEN" ]; }; then
+            echo "::error::Configure private GitHub SDK repository or DISCORD_SDK_AAR_URL secret."
+            exit 1
+          fi
           APP_VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           test "$GITHUB_REF_NAME" = "v$APP_VERSION" || { echo "::error::Tag must match versionName"; exit 1; }
       - name: Download official SDK privately
         run: |
           mkdir -p app/libs
-          curl --fail --location --retry 2 --silent --show-error "$DISCORD_SDK_AAR_URL" -o app/libs/discord_partner_sdk.aar
-          unzip -t app/libs/discord_partner_sdk.aar >/dev/null
+          if [ -n "$DISCORD_SDK_PRIVATE_REPO" ] && [ -n "$DISCORD_SDK_READ_TOKEN" ]; then
+            if ! [[ "$DISCORD_SDK_PRIVATE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "::error::Invalid private SDK repository identifier"; exit 1
+            fi
+            curl --fail --location --retry 2 --silent --show-error \
+              --header "Authorization: Bearer $DISCORD_SDK_READ_TOKEN" \
+              --header "Accept: application/vnd.github.raw+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$DISCORD_SDK_PRIVATE_REPO/contents/discord_partner_sdk.aar" \
+              --output app/libs/discord_partner_sdk.aar
+          else
+            curl --fail --location --retry 2 --silent --show-error "$DISCORD_SDK_AAR_URL" -o app/libs/discord_partner_sdk.aar
+          fi
+          python3 scripts/verify_sdk.py app/libs/discord_partner_sdk.aar
       - name: Configure persistent signing key
         run: |
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/switch-presence-release.jks"
