@@ -201,11 +201,11 @@ class PresenceService : Service() {
                         val retryDelay = DiscordPublishRetryPolicy.delayMs(
                             failedPublishRetries, DiscordBridge.retryDelayMs()
                         )
+                        val generation = presenceGeneration.get()
                         val game = lastActiveGame
                         if (retryDelay != null && elapsed >= retryDelay && game != null && !stopping) {
                             // Callback executor owns RPC calls. Do not create another Client:
                             // the intermittent RPCError (code 0) can resolve on the same one.
-                            val generation = presenceGeneration.get()
                             if (generation == presenceGeneration.get() && lastActiveGame === game) {
                                 failedPublishRetries++
                                 lastPublishedElapsed = SystemClock.elapsedRealtime()
@@ -269,8 +269,10 @@ class PresenceService : Service() {
                         gameStartedAt = System.currentTimeMillis()
                         failedPublishRetries = 0
                     }
+                    val elapsedSincePublish = SystemClock.elapsedRealtime() - lastPublishedElapsed
+                    val suggestedRetryDelay = if (DiscordBridge.supported) DiscordBridge.retryDelayMs() else -1L
                     if (DiscordBridge.supported && (changed ||
-                            SystemClock.elapsedRealtime() - lastPublishedElapsed > 90_000)) {
+                            DiscordPublishRetryPolicy.canPeriodicRefresh(elapsedSincePublish, suggestedRetryDelay))) {
                         val generation = presenceGeneration.incrementAndGet()
                         val started = gameStartedAt
                         failedPublishRetries = 0
