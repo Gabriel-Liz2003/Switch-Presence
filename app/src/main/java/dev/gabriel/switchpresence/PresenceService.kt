@@ -8,12 +8,19 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
+/**
+ * Poll Nintendo while a user-controlled foreground service is active.
+ * Clear requests are best-effort: Discord's ClearRichPresence() has no completion
+ * callback, so never mark removal as confirmed by Discord.
+ */
 class PresenceService : Service() {
     private val polling = Executors.newSingleThreadScheduledExecutor()
     private val callbacks = Executors.newSingleThreadScheduledExecutor()
@@ -22,7 +29,9 @@ class PresenceService : Service() {
     private var lastGame: String? = null
     private var gameStartedAt = 0L
     private var lastPublishedElapsed = 0L
+    private var offlineClearAttempts = 0
     private var errors = 0
+    @Volatile private var stopping = false
     private lateinit var settings: SecureSettings
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -36,16 +45,34 @@ class PresenceService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                if (!stopping) {
+                    stopping = true
+                    pollTask?.cancel(true)
+                    settings.status = "Parando: pedindo remoção da atividade no Discord..."
+                    // Keep the SDK callback pump alive briefly before terminating the service.
+                    clearDiscord("Parando: limpeza solicitada ao Discord")
+                    Handler(Looper.getMainLooper()).postDelayed({ stopSelf(startId) }, 1_500L)
+                }
+                return START_NOT_STICKY
+            }
+            ACTION_CLEAR -> {
+                if (pollTask != null && !stopping) {
+                    clearDiscord("Limpeza manual solicitada ao Discord")
+                    // If still online the following poll may legitimately publish again.
+                    lastGame = null
+                    lastPublishedElapsed = 0L
+                }
+                return START_STICKY
+            }
         }
+        if (stopping) return START_NOT_STICKY
         if (pollTask != null) return START_STICKY
         startForegroundNotice()
 
-        val url: String
-        try {
-            url = Nxapi.validate(settings.presenceUrl)
+        val url = try {
+            Nxapi.validate(settings.presenceUrl)
         } catch (_: Exception) {
             settings.status = "Configure uma URL válida do nxapi."
             stopSelf()
@@ -66,15 +93,25 @@ class PresenceService : Service() {
             }, 0, 500, TimeUnit.MILLISECONDS)
         }
         pollTask = polling.scheduleWithFixedDelay({
+            if (stopping) return@scheduleWithFixedDelay
             try {
                 val game = Nxapi.fetch(url)
+                if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
-                    if (lastGame != null) DiscordBridge.clear()
                     lastGame = null
-                    gameStartedAt = 0
-                    settings.status = "Console offline ou nenhum jogo aberto."
+                    gameStartedAt = 0L
+                    lastPublishedElapsed = 0L
+                    // IMPORTANT: clear even after an app restart while already offline.
+                    // Reissue while offline because mobile RPC may lose a request.
+                    offlineClearAttempts++
+                    if (DiscordBridge.supported) {
+                        clearDiscord("Console offline • pedido de remoção #$offlineClearAttempts")
+                    } else {
+                        settings.status = "Console offline ou nenhum jogo aberto."
+                    }
                 } else {
+                    offlineClearAttempts = 0
                     val changed = game.title != lastGame
                     if (changed) {
                         lastGame = game.title
@@ -91,14 +128,29 @@ class PresenceService : Service() {
                 }
             } catch (error: Exception) {
                 errors++
-                settings.status = "Falha nxapi (${errors}): ${error.message ?: "sem conexão"}"
-                if (errors >= 3 && lastGame != null) {
-                    DiscordBridge.clear()
+                settings.status = "Falha nxapi ($errors): ${error.message ?: "sem conexão"}"
+                if (errors >= 3) {
                     lastGame = null
+                    gameStartedAt = 0L
+                    lastPublishedElapsed = 0L
+                    if (DiscordBridge.supported) {
+                        clearDiscord("Sem dados Nintendo: limpeza solicitada ao Discord")
+                    }
                 }
             }
         }, 0, 45, TimeUnit.SECONDS)
         return START_STICKY
+    }
+
+    private fun clearDiscord(label: String) {
+        try {
+            if (DiscordBridge.supported) {
+                DiscordBridge.clear()
+                settings.status = "$label (sem confirmação do Discord)"
+            }
+        } catch (e: Exception) {
+            settings.status = "Falha ao limpar Discord: ${e.message ?: "desconhecida"}"
+        }
     }
 
     private fun startForegroundNotice() {
@@ -120,17 +172,23 @@ class PresenceService : Service() {
     }
 
     override fun onDestroy() {
+        stopping = true
         pollTask?.cancel(true)
-        callbackTask?.cancel(true)
         polling.shutdownNow()
+        try {
+            DiscordBridge.clear()
+            // Dispatch queued native callbacks once before leaving.
+            DiscordBridge.pump()
+        } catch (_: Exception) {}
+        callbackTask?.cancel(true)
         callbacks.shutdownNow()
-        try { DiscordBridge.clear() } catch (_: Exception) {}
         settings.running = false
-        settings.status = "Sincronização parada."
+        settings.status = "Monitoramento parado (limpeza solicitada ao Discord)."
         super.onDestroy()
     }
 
     companion object {
         const val ACTION_STOP = "dev.gabriel.switchpresence.STOP"
+        const val ACTION_CLEAR = "dev.gabriel.switchpresence.CLEAR"
     }
 }

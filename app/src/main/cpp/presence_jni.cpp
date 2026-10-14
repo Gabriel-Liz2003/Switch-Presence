@@ -10,6 +10,7 @@ namespace {
 std::recursive_mutex guard;
 std::unique_ptr<discordpp::Client> client;
 std::string status = "Discord não conectado";
+uint64_t presenceRevision = 0;
 
 std::string utf(JNIEnv* env, jstring value) {
     if (!value) return "";
@@ -65,9 +66,12 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativePublish(
         assets.SetLargeText(title.substr(0, 128));
         activity.SetAssets(assets);
     }
+    // Ignore late publication callbacks after ClearRichPresence was requested.
+    const uint64_t revision = ++presenceRevision;
     status = "Enviando atividade ao Discord";
-    client->UpdateRichPresence(activity, [](discordpp::ClientResult result) {
+    client->UpdateRichPresence(activity, [revision](discordpp::ClientResult result) {
         std::lock_guard<std::recursive_mutex> lock(guard);
+        if (revision != presenceRevision) return;
         status = result.Successful() ? "Atividade publicada" : "Discord recusou: " + result.Error().substr(0, 180);
     });
 }
@@ -75,8 +79,14 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativePublish(
 extern "C" JNIEXPORT void JNICALL
 Java_dev_gabriel_switchpresence_DiscordBridge_nativeClear(JNIEnv*, jobject) {
     std::lock_guard<std::recursive_mutex> lock(guard);
-    if (client) client->ClearRichPresence();
-    status = "Atividade removida";
+    ++presenceRevision;
+    if (client) {
+        client->ClearRichPresence();
+        // ClearRichPresence has no result callback. Do not claim server confirmation.
+        status = "Pedido de remoção enviado";
+    } else {
+        status = "Discord não conectado";
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL

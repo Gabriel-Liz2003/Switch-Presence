@@ -9,7 +9,7 @@ Android app for showing **Nintendo Switch / Switch 2** game activity on your **o
 - Dark native Android interface with Nintendo-inspired red accent.
 - Reads a user-controlled `nxapi-presence` URL over HTTPS, detects game and Switch generation, handles offline/error states.
 - Encrypts the presence URL using Android Keystore / AES-GCM, never uploads credentials or asks for Nintendo/Discord passwords.
-- Foreground polling while enabled (45 s), notification with stop action, SDK callback processing, clears Rich Presence on stop/offline.
+- Foreground polling while enabled (45 s), notification with stop action, SDK callback processing, **retries ClearRichPresence on every offline poll (including the first poll after an app restart)** and provides a manual clear button. As the official SDK ClearRichPresence has no completion callback, the app says only “removal requested”, not that Discord has confirmed removal.
 - JNI bridge to **official** Discord Social SDK RPC, no OAuth flow required when the Android Discord app is installed and signed in.
 - **In-app updates:** checks `releases/latest`, compares versions, fetches APK + **required SHA-256**, verifies integrity, opens Android's standard installer after confirmation.
 - GitHub Actions: preview debug builds on pushes/PRs, separately gated release builds on `vX.Y.Z` tags.
@@ -58,7 +58,7 @@ To avoid publishing the proprietary AAR in this **public** app repository:
    - Under **Variables**, add `DISCORD_SDK_PRIVATE_REPO` = `YOUR_USERNAME/Switch-Presence-SDK`.
    - Under **Secrets**, add `DISCORD_SDK_READ_TOKEN` = the fine-grained token. **Never put the token or the AAR in the public repository, PRs, screenshots, logs or chat.**
 4. Open **Actions → Android CI → Run workflow** on the `main` branch. The `Full SDK preview (manual)` job downloads both pieces from the private repo, reconstructs the SDK, verifies its pinned SHA-256 and builds `SwitchPresence-FULL-debug-Discord`.
-5. Download that Actions artifact ZIP and install the `app-debug.apk` on Android. This build has the SDK, but the **end-to-end Discord RPC functionality must still be tested on your device**. It is debug-signed, not an updateable production Release APK.
+5. Download that Actions artifact ZIP and install the `app-debug.apk` on Android. This build has the SDK, but **Discord RPC behavior must still be tested on your device**. GitHub-hosted debug builds often get **different debug signing keys on each workflow run**. When Android rejects a new debug APK as an update, save your private nxapi URL and Discord Application ID somewhere safe, **uninstall the old debug APK**, then install the new one and re-enter settings. This resets the encrypted URL stored locally. Production release updates require a persistent signing key.
 
 The exact original SDK is pinned to SHA-256 `b1b2491f1e1848c79fd6f1986d5aa1e0c8019e88a6e62c7be06b89e8e4870933` for safe reconstruction. Do **not** replace it with a different SDK version without updating the verification script. The public PR/push workflow continues to build **monitor-only** APKs and cannot fetch the private SDK. Manual full preview and tagged release workflows obtain the SDK only from the secret-protected private repository.
 **Publish a full release (requires setup):**
@@ -96,4 +96,5 @@ When a newer release does not exist, it shows the currently installed version. I
 - [x] CI preview APK and guarded signed release workflow
 - [ ] Full Android NDK/Gradle build with official SDK and on-device RPC validation
 - [x] Validate SDK binary structure and JNI C++ syntax against owner-supplied 1.10.19337 AAR
-- [ ] End-to-end testing after nxapi enrollment
+- [x] End-to-end activity publication demonstrated on device (user report, The Witcher 3)
+- [ ] Confirm Discord actually removes stale activity after offline; SDK ClearRichPresence has no result callback
