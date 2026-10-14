@@ -29,7 +29,6 @@ class PresenceService : Service() {
     private var lastGame: String? = null
     private var gameStartedAt = 0L
     private var lastPublishedElapsed = 0L
-    private var offlineClearAttempts = 0
     private var errors = 0
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
@@ -128,16 +127,20 @@ class PresenceService : Service() {
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
-                    // IMPORTANT: clear even after an app restart while already offline.
-                    // Reissue while offline because mobile RPC may lose a request.
-                    offlineClearAttempts++
+                    // Retry the clear in the background on every offline poll, even
+                    // after an app restart. ClearRichPresence() has no callback;
+                    // do not imply that the app is waiting for Discord to respond.
                     if (DiscordBridge.supported) {
-                        clearDiscord("Console offline • pedido de remoção #$offlineClearAttempts")
+                        try {
+                            DiscordBridge.clear()
+                            settings.status = "Switch offline • aguardando próximo jogo"
+                        } catch (error: Exception) {
+                            settings.status = "Switch offline • falha ao limpar Discord: ${error.message ?: "erro"}"
+                        }
                     } else {
-                        settings.status = "Console offline ou nenhum jogo aberto."
+                        settings.status = "Switch offline • aguardando próximo jogo"
                     }
                 } else {
-                    offlineClearAttempts = 0
                     val changed = game.title != lastGame
                     if (changed) {
                         lastGame = game.title
