@@ -35,6 +35,8 @@ class PresenceService : Service() {
     private var errors = 0
     private var offlinePolls = 0
     @Volatile private var failedPublishRetries = 0
+    // Only changed by the SDK callback executor or on an explicit user/game transition.
+    @Volatile private var automaticReconnects = 0
     private val presenceGeneration = AtomicLong(0L)
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
@@ -101,6 +103,7 @@ class PresenceService : Service() {
                     pollTask = null
                     presenceGeneration.incrementAndGet()
                     failedPublishRetries = 0
+                    automaticReconnects = 0
                     activeGameSummary = null
                     lastActiveGame = null
 
@@ -127,6 +130,7 @@ class PresenceService : Service() {
                 if (pollTask != null && !stopping && DiscordBridge.supported) {
                     val generation = presenceGeneration.incrementAndGet()
                     failedPublishRetries = 0
+                    automaticReconnects = 0
                     settings.status = "Reconectando o Discord..."
                     enqueueDiscord {
                         if (!stopping && generation == presenceGeneration.get()) {
@@ -152,6 +156,7 @@ class PresenceService : Service() {
                 if (pollTask != null && !stopping) {
                     presenceGeneration.incrementAndGet()
                     failedPublishRetries = 0
+                    automaticReconnects = 0
                     // Clear using the original native RPC client (no premature reset).
                     enqueueDiscord {
                         clearDiscordWithDrain()
@@ -197,7 +202,42 @@ class PresenceService : Service() {
                     if (!stopping && summary != null) {
                         val sdkStatus = DiscordBridge.status()
                         val elapsed = (SystemClock.elapsedRealtime() - lastPublishedElapsed).coerceAtLeast(0L)
-                        if (sdkStatus == "Atividade publicada") failedPublishRetries = 0
+                        if (sdkStatus == "Atividade publicada") {
+                            failedPublishRetries = 0
+                            automaticReconnects = 0
+                        }
+
+                        val timeoutReconnectsSoFar = automaticReconnects
+                        if (DiscordTimeoutRecoveryPolicy.shouldReconnect(
+                                sdkStatus, elapsed, timeoutReconnectsSoFar
+                            )) {
+                            val stalledGame = lastActiveGame
+                            if (stalledGame != null && !stopping) {
+                                // Follow the proven manual reconnect path. The callback task
+                                // already owns the SDK executor, so there is no second queue.
+                                val generation = presenceGeneration.incrementAndGet()
+                                val startedAt = gameStartedAt
+                                automaticReconnects = timeoutReconnectsSoFar + 1
+                                failedPublishRetries = 0
+                                lastPublishedElapsed = SystemClock.elapsedRealtime()
+                                if (!stopping && generation == presenceGeneration.get() &&
+                                        lastActiveGame === stalledGame) {
+                                    settings.status = "$summary • Discord sem resposta; reconexão automática " +
+                                        "$automaticReconnects/${DiscordTimeoutRecoveryPolicy.MAX_RECONNECTS}"
+                                    val connected = DiscordBridge.setup(settings.discordId)
+                                    // Nintendo polling can complete while native setup is running.
+                                    // Never republish a game if its presence has since gone offline.
+                                    if (connected && !stopping && generation == presenceGeneration.get() &&
+                                            lastActiveGame === stalledGame) {
+                                        // Do not clear here: a game is currently active.
+                                        DiscordBridge.publish(stalledGame, startedAt)
+                                    } else if (!connected && !stopping && lastActiveGame === stalledGame) {
+                                        settings.status = "$summary • Falha ao reconectar automaticamente ao Discord"
+                                    }
+                                }
+                            }
+                        }
+
                         val retryDelay = DiscordPublishRetryPolicy.delayMs(
                             failedPublishRetries, DiscordBridge.retryDelayMs()
                         )
@@ -238,6 +278,7 @@ class PresenceService : Service() {
                     val clearGeneration = presenceGeneration.incrementAndGet()
                     offlinePolls++
                     failedPublishRetries = 0
+                    automaticReconnects = 0
                     activeGameSummary = null
                     lastActiveGame = null
                     lastGame = null
@@ -268,6 +309,7 @@ class PresenceService : Service() {
                         lastGame = game.title
                         gameStartedAt = System.currentTimeMillis()
                         failedPublishRetries = 0
+                        automaticReconnects = 0
                     }
                     val elapsedSincePublish = SystemClock.elapsedRealtime() - lastPublishedElapsed
                     val suggestedRetryDelay = if (DiscordBridge.supported) DiscordBridge.retryDelayMs() else -1L
@@ -304,6 +346,7 @@ class PresenceService : Service() {
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
                     failedPublishRetries = 0
+                    automaticReconnects = 0
                     presenceGeneration.incrementAndGet()
                     if (DiscordBridge.supported) {
                         enqueueDiscord { DiscordBridge.clear() }

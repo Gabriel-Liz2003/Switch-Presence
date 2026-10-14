@@ -14,7 +14,8 @@ class DiscordStatusTextTest {
 
     @Test fun pendingRpcLongerThanTwentySecondsExplainsWhyPresenceIsAbsent() {
         val message = DiscordStatusText.describe("Enviando atividade ao Discord", 20_000L)
-        assertTrue(message.contains("sem resposta"))
+        assertTrue(message.contains("não confirmou"))
+        org.junit.Assert.assertFalse(message.contains("aberto no celular"))
     }
 
     @Test fun confirmedSuccessIsNotOverriddenByElapsedTimeout() {
