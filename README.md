@@ -48,10 +48,23 @@ References: [Discord mobile Rich Presence without auth](https://github.com/disco
 
 **Every push to `main` and every pull request:** the `Android CI` workflow builds a **monitor-only debug APK** and uploads it as an Actions artifact. It is suitable for testing the UI and nxapi URL, not Rich Presence.
 
+### Test a full Discord-enabled APK without a PC
+
+To avoid publishing the proprietary AAR in this **public** app repository:
+
+1. In GitHub create a **private** repository, for example `Switch-Presence-SDK`, and upload the original `discord_partner_sdk.aar` to its repository root. Keep the repository private.
+2. In GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens, create a short-lived token with **Contents: Read-only** permission on **only that private SDK repository**.
+3. In this **public app repo**, open Settings → Secrets and variables → Actions:
+   - Under **Variables**, add `DISCORD_SDK_PRIVATE_REPO` = `YOUR_USERNAME/Switch-Presence-SDK`.
+   - Under **Secrets**, add `DISCORD_SDK_READ_TOKEN` = the fine-grained token. **Never put the token or the AAR in the public repository, PRs, screenshots, logs or chat.**
+4. Open **Actions → Android CI → Run workflow** on the `main` branch. The `Full SDK preview (manual)` job downloads the AAR from the private repo and builds `SwitchPresence-FULL-debug-Discord`.
+5. Download that Actions artifact ZIP and install the `app-debug.apk` on Android. This build has the SDK, but the **end-to-end Discord RPC functionality must still be tested on your device**. It is debug-signed, not an updateable production Release APK.
+
+The public PR/push workflow continues to build **monitor-only** APKs and cannot fetch the private SDK. Manual full preview and tagged release workflows obtain the SDK only from the secret-protected private repository.
 **Publish a full release (requires setup):**
 
 - Provide these GitHub Actions encrypted secrets under Settings → Secrets and variables → Actions:
-  - `DISCORD_SDK_AAR_URL`: a private HTTPS direct-download URL for the official SDK AAR; it must remain valid for the workflow. Do not distribute the bare AAR publicly.
+  - Either configure the private SDK repository + read-only token above (**preferred**) or `DISCORD_SDK_AAR_URL`, a private HTTPS direct-download URL for the official AAR. Never expose this AAR publicly.
   - `ANDROID_KEYSTORE_B64`: Base64 of a persistent Android signing JKS keystore. Keep your signing key backed up securely.
   - `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`: corresponding JKS values.
 - Update **both** `versionCode` (increment) and `versionName` (semantic version) in `app/build.gradle.kts`.
