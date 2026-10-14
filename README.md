@@ -52,19 +52,19 @@ References: [Discord mobile Rich Presence without auth](https://github.com/disco
 
 To avoid publishing the proprietary AAR in this **public** app repository:
 
-1. In GitHub create a **private** repository, for example `Switch-Presence-SDK`, and upload the original `discord_partner_sdk.aar` to its repository root. Keep the repository private.
+1. In GitHub create a **private** repository, for example `Switch-Presence-SDK`. Upload **both** `discord_partner_sdk.aar.part01` and `discord_partner_sdk.aar.part02` to its root. The Android SDK AAR exceeds GitHub's 25 MiB browser-upload limit, so the project owner divided the verified 1.10.19337 SDK into two parts. Keep this repository private.
 2. In GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens, create a short-lived token with **Contents: Read-only** permission on **only that private SDK repository**.
 3. In this **public app repo**, open Settings → Secrets and variables → Actions:
    - Under **Variables**, add `DISCORD_SDK_PRIVATE_REPO` = `YOUR_USERNAME/Switch-Presence-SDK`.
    - Under **Secrets**, add `DISCORD_SDK_READ_TOKEN` = the fine-grained token. **Never put the token or the AAR in the public repository, PRs, screenshots, logs or chat.**
-4. Open **Actions → Android CI → Run workflow** on the `main` branch. The `Full SDK preview (manual)` job downloads the AAR from the private repo and builds `SwitchPresence-FULL-debug-Discord`.
+4. Open **Actions → Android CI → Run workflow** on the `main` branch. The `Full SDK preview (manual)` job downloads both pieces from the private repo, reconstructs the SDK, verifies its pinned SHA-256 and builds `SwitchPresence-FULL-debug-Discord`.
 5. Download that Actions artifact ZIP and install the `app-debug.apk` on Android. This build has the SDK, but the **end-to-end Discord RPC functionality must still be tested on your device**. It is debug-signed, not an updateable production Release APK.
 
-The public PR/push workflow continues to build **monitor-only** APKs and cannot fetch the private SDK. Manual full preview and tagged release workflows obtain the SDK only from the secret-protected private repository.
+The exact original SDK is pinned to SHA-256 `b1b2491f1e1848c79fd6f1986d5aa1e0c8019e88a6e62c7be06b89e8e4870933` for safe reconstruction. Do **not** replace it with a different SDK version without updating the verification script. The public PR/push workflow continues to build **monitor-only** APKs and cannot fetch the private SDK. Manual full preview and tagged release workflows obtain the SDK only from the secret-protected private repository.
 **Publish a full release (requires setup):**
 
 - Provide these GitHub Actions encrypted secrets under Settings → Secrets and variables → Actions:
-  - Either configure the private SDK repository + read-only token above (**preferred**) or `DISCORD_SDK_AAR_URL`, a private HTTPS direct-download URL for the official AAR. Never expose this AAR publicly.
+  - Either configure the private SDK repository with both split files + read-only token above (**preferred**) or `DISCORD_SDK_AAR_URL`, a private HTTPS direct-download URL for the official AAR. Never expose this AAR publicly.
   - `ANDROID_KEYSTORE_B64`: Base64 of a persistent Android signing JKS keystore. Keep your signing key backed up securely.
   - `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`: corresponding JKS values.
 - Update **both** `versionCode` (increment) and `versionName` (semantic version) in `app/build.gradle.kts`.
