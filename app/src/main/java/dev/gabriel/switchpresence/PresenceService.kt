@@ -15,6 +15,7 @@ import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Poll Nintendo while a user-controlled foreground service is active.
@@ -32,7 +33,7 @@ class PresenceService : Service() {
     @Volatile private var activeGameSummary: String? = null
     private var errors = 0
     private var offlinePolls = 0
-    @Volatile private var presenceGeneration = 0L
+    private val presenceGeneration = AtomicLong(0L)
     private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
     private lateinit var settings: SecureSettings
@@ -79,7 +80,7 @@ class PresenceService : Service() {
                     settings.status = "Monitoramento parado; remoção solicitada ao Discord."
                     pollTask?.cancel(true)
                     pollTask = null
-                    presenceGeneration++
+                    presenceGeneration.incrementAndGet()
                     activeGameSummary = null
 
                     if (DiscordBridge.supported) {
@@ -108,7 +109,7 @@ class PresenceService : Service() {
             }
             ACTION_CLEAR -> {
                 if (pollTask != null && !stopping) {
-                    presenceGeneration++
+                    presenceGeneration.incrementAndGet()
                     // Repair RPC session before asking Discord to forget stale activity.
                     enqueueDiscord {
                         if (DiscordBridge.setup(settings.discordId)) {
@@ -171,7 +172,7 @@ class PresenceService : Service() {
                 if (stopping) return@scheduleWithFixedDelay
                 errors = 0
                 if (game == null) {
-                    presenceGeneration++
+                    presenceGeneration.incrementAndGet()
                     offlinePolls++
                     activeGameSummary = null
                     lastGame = null
@@ -204,12 +205,12 @@ class PresenceService : Service() {
                     }
                     if (DiscordBridge.supported && (changed ||
                             SystemClock.elapsedRealtime() - lastPublishedElapsed > 90_000)) {
-                        val generation = ++presenceGeneration
+                        val generation = presenceGeneration.incrementAndGet()
                         val started = gameStartedAt
                         lastPublishedElapsed = SystemClock.elapsedRealtime()
                         enqueueDiscord {
                             // A late publish after an offline poll would reintroduce stale activity.
-                            if (!stopping && generation == presenceGeneration) {
+                            if (!stopping && generation == presenceGeneration.get()) {
                                 DiscordBridge.publish(game, started)
                             }
                         }
@@ -232,7 +233,7 @@ class PresenceService : Service() {
                     lastGame = null
                     gameStartedAt = 0L
                     lastPublishedElapsed = 0L
-                    presenceGeneration++
+                    presenceGeneration.incrementAndGet()
                     if (DiscordBridge.supported) {
                         enqueueDiscord { DiscordBridge.clear() }
                     }
