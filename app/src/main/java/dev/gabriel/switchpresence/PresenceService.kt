@@ -182,7 +182,7 @@ class PresenceService : Service() {
                     // do not imply that the app is waiting for Discord to respond.
                     settings.status = "Switch offline • aguardando próximo jogo"
                     if (DiscordBridge.supported) {
-                        val repairTransport = offlinePolls == 2 || (offlinePolls > 2 && offlinePolls % 8 == 0)
+                        val repairTransport = DiscordReconnectPolicy.shouldRefresh(offlinePolls)
                         enqueueDiscord {
                             if (repairTransport && !DiscordBridge.setup(settings.discordId)) {
                                 settings.status = "Discord desconectado • abra o Discord no celular"
