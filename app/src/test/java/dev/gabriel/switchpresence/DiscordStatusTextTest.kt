@@ -1,6 +1,7 @@
 package dev.gabriel.switchpresence
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiscordStatusTextTest {
@@ -13,7 +14,7 @@ class DiscordStatusTextTest {
 
     @Test fun pendingRpcLongerThanTwentySecondsExplainsWhyPresenceIsAbsent() {
         val message = DiscordStatusText.describe("Enviando atividade ao Discord", 20_000L)
-        assert(message.contains("sem resposta"))
+        assertTrue(message.contains("sem resposta"))
     }
 
     @Test fun confirmedSuccessIsNotOverriddenByElapsedTimeout() {
