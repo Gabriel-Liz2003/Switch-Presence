@@ -68,7 +68,7 @@ Java_dev_gabriel_switchpresence_DiscordBridge_nativePublish(
     status = "Enviando atividade ao Discord";
     client->UpdateRichPresence(activity, [](discordpp::ClientResult result) {
         std::lock_guard<std::recursive_mutex> lock(guard);
-        status = result.Successful() ? "Atividade publicada" : "Discord recusou a atualização";
+        status = result.Successful() ? "Atividade publicada" : "Discord recusou: " + result.Error().substr(0, 180);
     });
 }
 
