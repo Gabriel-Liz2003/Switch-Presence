@@ -121,6 +121,21 @@ class MainActivity : Activity() {
 
         val test = button("TESTAR CONEXÃO NINTENDO", surface).apply { setOnClickListener { testNxapi() } }
         root.addView(test, LinearLayout.LayoutParams(-1, dp(54)))
+        root.addView(space(11))
+        root.addView(button("LIMPAR PRESENÇA NO DISCORD AGORA", surface).apply {
+            setOnClickListener {
+                if (settings.running) {
+                    startService(Intent(this@MainActivity, PresenceService::class.java)
+                        .setAction(PresenceService.ACTION_CLEAR))
+                    settings.status = "Limpeza manual solicitada ao Discord."
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Monitoramento parado")
+                        .setMessage("Inicie o monitoramento para conectar ao Discord e enviar a limpeza.")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+        }, LinearLayout.LayoutParams(-1, dp(54)))
         root.addView(space(29))
 
         root.addView(label("ATUALIZAÇÕES", accent, 12f, true))
@@ -175,9 +190,10 @@ class MainActivity : Activity() {
 
     private fun toggle() {
         if (settings.running) {
-            stopService(Intent(this, PresenceService::class.java))
-            settings.running = false
-            settings.status = "Parando a sincronização..."
+            // Use a STOP intent so the SDK can dispatch the clear before service shutdown.
+            startService(Intent(this, PresenceService::class.java)
+                .setAction(PresenceService.ACTION_STOP))
+            settings.status = "Parando e limpando a atividade do Discord..."
             return
         }
         if (!persist(DiscordBridge.supported)) return
