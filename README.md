@@ -61,16 +61,27 @@ To avoid publishing the proprietary AAR in this **public** app repository:
 5. Download that Actions artifact ZIP and install the `app-debug.apk` on Android. This build has the SDK, but **Discord RPC behavior must still be tested on your device**. GitHub-hosted debug builds often get **different debug signing keys on each workflow run**. When Android rejects a new debug APK as an update, save your private nxapi URL and Discord Application ID somewhere safe, **uninstall the old debug APK**, then install the new one and re-enter settings. This resets the encrypted URL stored locally. Production release updates require a persistent signing key.
 
 The exact original SDK is pinned to SHA-256 `b1b2491f1e1848c79fd6f1986d5aa1e0c8019e88a6e62c7be06b89e8e4870933` for safe reconstruction. Do **not** replace it with a different SDK version without updating the verification script. The public pull-request workflow continues to build **monitor-only** APKs and cannot fetch the private SDK. Trusted main-branch push / manual full-preview and tagged release workflows obtain the SDK only from the secret-protected private repository. GitHub-hosted full debug artifacts have seven-day retention.
-**Publish a full release (requires setup):**
+## Production releases and permanent in-app updates
 
-- Provide these GitHub Actions encrypted secrets under Settings → Secrets and variables → Actions:
-  - Either configure the private SDK repository with both split files + read-only token above (**preferred**) or `DISCORD_SDK_AAR_URL`, a private HTTPS direct-download URL for the official AAR. Never expose this AAR publicly.
-  - `ANDROID_KEYSTORE_B64`: Base64 of a persistent Android signing JKS keystore. Keep your signing key backed up securely.
-  - `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`: corresponding JKS values.
-- Update **both** `versionCode` (increment) and `versionName` (semantic version) in `app/build.gradle.kts`.
-- Push a matching tag (`v0.1.0`, `v0.2.0`, etc.). The release job **fails closed** if the SDK/signing secrets are unavailable. It builds a signed full APK and publishes `SwitchPresence.apk` and `SwitchPresence.sha256` in a GitHub Release.
+The Android `Verificar atualizações` button checks GitHub **Releases**, not Actions artifacts. A preview/debug APK is only for testing and **cannot be automatically upgraded to a production-signed APK**. Production needs one permanent signing key and two GitHub Actions secrets.
 
-**Use the exact same signing keystore for every release.** Android rejects updates signed with another key. Preview debug builds and full release builds use different signatures, so uninstall a preview before installing the production version.
+### One-time maintainer setup (from mobile)
+
+1. Back up the owner-generated **private signing ZIP** outside GitHub. It contains `switchpresence-release.jks`, a Base64 copy and the randomly generated password. **Never commit the key, Base64 or password, and never share the ZIP.** Losing the key prevents updating installed users under the same Android package.
+2. In `Switch-Presence` → **Settings → Secrets and variables → Actions → Secrets**, create:
+   - `ANDROID_KEYSTORE_B64`: the complete **single-line** contents of `ANDROID_KEYSTORE_B64.txt` in the private ZIP.
+   - `ANDROID_STORE_PASSWORD`: the value in `ANDROID_STORE_PASSWORD.txt`.
+3. Keep the existing `DISCORD_SDK_READ_TOKEN` secret and `DISCORD_SDK_PRIVATE_REPO` variable pointing to the private AAR chunks (GitHub already used them to compile a working Discord debug APK).
+4. In the same **Actions → Variables** screen, add `RELEASE_ENABLED` = `true`.
+5. Go to **Actions → Publish signed Android updates → Run workflow**, branch `main`, to create the very first stable Release (or let the next main push trigger it automatically).
+
+The separate `.github/workflows/release.yml` job builds with the licensed SDK, imports the **same** PKCS12 signing key every time, verifies the signed APK using `apksigner`, and publishes a **stable GitHub Release** with exactly `SwitchPresence.apk` and `SwitchPresence.sha256`. Every trusted `main` push after enabling releases generates a later version (`1.0.N`, monotonically increasing `versionCode`). Pull requests never have access to private SDK or signing secrets.
+
+### One-time migration from a debug APK
+
+If you previously installed `app-debug.apk`, **save your private nxapi presence URL and Discord Application ID locally**, uninstall that debug version, then install `SwitchPresence.apk` from the first stable Release. The package name stays the same, but Android will reject installing the production-signed app over an app signed with a different debug certificate. Uninstalling erases the locally encrypted URL and other app settings.
+
+**All subsequent stable Releases** use the same key, so the in-app updater can install them over the previous stable version without erasing settings. Android still asks the user to approve installation. Never promise an automatic silent installation.
 
 ## Updates directly in the app
 
@@ -92,7 +103,8 @@ When a newer release does not exist, it shows the currently installed version. I
 
 - [x] Android app, nxapi reader, foreground polling
 - [x] Official SDK bridge (requires official AAR to link)
-- [x] GitHub Releases update checks, checksum and Android installer
+- [x] GitHub Releases update checks, checksum and Android installer (including first-time sideload permission return)
+- [x] Stable GitHub Releases publishing workflow with permanent signing (activation requires owner-provided encrypted GitHub Secrets)
 - [x] CI preview APK and guarded signed release workflow
 - [ ] Full Android NDK/Gradle build with official SDK and on-device RPC validation
 - [x] Validate SDK binary structure and JNI C++ syntax against owner-supplied 1.10.19337 AAR
