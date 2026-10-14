@@ -31,6 +31,7 @@ class PresenceService : Service() {
     private var lastPublishedElapsed = 0L
     private var offlineClearAttempts = 0
     private var errors = 0
+    private val stopHandler = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
     private lateinit var settings: SecureSettings
 
@@ -48,12 +49,35 @@ class PresenceService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 if (!stopping) {
+                    // Stop immediately in the UI and cancel any pending Nintendo polling.
+                    // Do not run the native SDK's potentially blocking mutex on the main thread.
                     stopping = true
+                    settings.running = false
+                    settings.status = "Monitoramento parado; remoção solicitada ao Discord."
                     pollTask?.cancel(true)
-                    settings.status = "Parando: pedindo remoção da atividade no Discord..."
-                    // Keep the SDK callback pump alive briefly before terminating the service.
-                    clearDiscord("Parando: limpeza solicitada ao Discord")
-                    Handler(Looper.getMainLooper()).postDelayed({ stopSelf(startId) }, 1_500L)
+                    pollTask = null
+
+                    if (DiscordBridge.supported) {
+                        try {
+                            callbacks.execute {
+                                try {
+                                    DiscordBridge.clear()
+                                    // Pump RPC after ClearRichPresence, without blocking service teardown.
+                                    repeat(3) {
+                                        DiscordBridge.pump()
+                                        Thread.sleep(150)
+                                    }
+                                } catch (_: Exception) {
+                                    // Discord's clear API has no success callback.
+                                }
+                            }
+                        } catch (_: Exception) { }
+                    }
+                    // Use stopSelf() rather than stopSelf(startId): additional start intents
+                    // must not keep an otherwise stopped foreground service alive.
+                    stopHandler.postDelayed({ stopSelf() }, 1_200L)
+                } else {
+                    stopSelf()
                 }
                 return START_NOT_STICKY
             }
@@ -127,6 +151,7 @@ class PresenceService : Service() {
                         (if (DiscordBridge.supported) " • ${DiscordBridge.status()}" else "")
                 }
             } catch (error: Exception) {
+                if (stopping) return@scheduleWithFixedDelay
                 errors++
                 settings.status = "Falha nxapi ($errors): ${error.message ?: "sem conexão"}"
                 if (errors >= 3) {
@@ -173,17 +198,24 @@ class PresenceService : Service() {
 
     override fun onDestroy() {
         stopping = true
+        // Mark stopped BEFORE closing executors; native Discord calls must not block UI state.
+        settings.running = false
+        settings.status = "Monitoramento parado. A remoção no Discord foi solicitada."
         pollTask?.cancel(true)
         polling.shutdownNow()
-        try {
-            DiscordBridge.clear()
-            // Dispatch queued native callbacks once before leaving.
-            DiscordBridge.pump()
-        } catch (_: Exception) {}
-        callbackTask?.cancel(true)
-        callbacks.shutdownNow()
-        settings.running = false
-        settings.status = "Monitoramento parado (limpeza solicitada ao Discord)."
+        if (DiscordBridge.supported) {
+            try {
+                callbacks.execute {
+                    try {
+                        DiscordBridge.clear()
+                        DiscordBridge.pump()
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+        }
+        callbackTask?.cancel(false)
+        // Avoid blocking the Android main thread waiting for native RPC shutdown.
+        callbacks.shutdown()
         super.onDestroy()
     }
 
