@@ -52,6 +52,7 @@ class PresenceService : Service() {
                     // Stop immediately in the UI and cancel any pending Nintendo polling.
                     // Do not run the native SDK's potentially blocking mutex on the main thread.
                     stopping = true
+                    isActive = false
                     settings.running = false
                     settings.status = "Monitoramento parado; remoção solicitada ao Discord."
                     pollTask?.cancel(true)
@@ -108,6 +109,7 @@ class PresenceService : Service() {
             return START_NOT_STICKY
         }
 
+        isActive = true
         settings.running = true
         settings.status = if (DiscordBridge.supported) "Conectando à Nintendo e ao Discord..."
                           else "Modo prévia: lendo Nintendo sem publicar no Discord."
@@ -198,6 +200,7 @@ class PresenceService : Service() {
 
     override fun onDestroy() {
         stopping = true
+        isActive = false
         // Mark stopped BEFORE closing executors; native Discord calls must not block UI state.
         settings.running = false
         settings.status = "Monitoramento parado. A remoção no Discord foi solicitada."
@@ -220,6 +223,8 @@ class PresenceService : Service() {
     }
 
     companion object {
+        @Volatile var isActive = false
+            private set
         const val ACTION_STOP = "dev.gabriel.switchpresence.STOP"
         const val ACTION_CLEAR = "dev.gabriel.switchpresence.CLEAR"
     }
